@@ -35,7 +35,7 @@ REGIONS=("full_ITS" "ITS1" "ITS2")
 # DIRECTORY SETUP
 # =============================================================================
 
-mkdir -p "$TMP_DIR" slurm
+mkdir -p "$TMP_DIR"
 
 # =============================================================================
 # HELPER FUNCTION: resolve FASTA path for a given region
@@ -60,7 +60,7 @@ region_fasta() {
 
 echo "Activating conda environment..."
 source ~/.bashrc
-conda activate dyna_clust_env
+conda activate dyna_clust_predict
 
 # =============================================================================
 # INPUT VALIDATION

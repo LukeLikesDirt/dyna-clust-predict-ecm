@@ -31,7 +31,7 @@ readonly MAX_PROPORTION=0.5
 
 echo "Activating conda environment..."
 source ~/.bashrc
-conda activate dyna_clust_env
+conda activate dyna_clust_predict
 
 # =============================================================================
 # INPUT VALIDATION

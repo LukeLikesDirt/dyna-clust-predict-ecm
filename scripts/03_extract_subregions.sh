@@ -36,7 +36,7 @@ mkdir -p ./data/ITS1 ./data/ITS2 "$ITSX_TMP"
 
 echo "Activating conda environment..."
 source ~/.bashrc
-conda activate dyna_clust_env
+conda activate dyna_clust_predict
 
 # =============================================================================
 # INPUT VALIDATION

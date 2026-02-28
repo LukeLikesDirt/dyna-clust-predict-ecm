@@ -73,7 +73,7 @@ REGION_CLASS["ITS2"]="./data/ITS2/eukaryome_ITS2.classification"
 # DIRECTORY SETUP
 # =============================================================================
 
-mkdir -p "$TMP_DIR" slurm
+mkdir -p "$TMP_DIR"
 
 # =============================================================================
 # HELPER FUNCTION
@@ -120,7 +120,7 @@ subset_fasta_and_classification() {
 
 echo "Activating conda environment..."
 source ~/.bashrc
-conda activate dyna_clust_env
+conda activate dyna_clust_predict
 
 # =============================================================================
 # INPUT VALIDATION

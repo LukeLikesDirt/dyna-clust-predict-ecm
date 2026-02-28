@@ -27,7 +27,7 @@ readonly CHECK_ANNOT="./R/check_annotations.R"
 
 echo "Activating conda environment..."
 source ~/.bashrc
-conda activate dyna_clust_env
+conda activate dyna_clust_predict
 
 # =============================================================================
 # INPUT VALIDATION

@@ -40,7 +40,7 @@ mkdir -p ./data/full_ITS tmp
 
 echo "Activating conda environment..."
 source ~/.bashrc
-conda activate dyna_clust_env
+conda activate dyna_clust_predict
 
 # =============================================================================
 # INPUT VALIDATION
