@@ -23,3 +23,4 @@ dependencies:
   - itsx>=1.1          # --multi_thread and current HMM profiles
   - hmmer>=3.3         # required by ITSx
   - seqkit>=2.0
+  - p7zip
