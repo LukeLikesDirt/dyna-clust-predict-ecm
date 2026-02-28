@@ -83,7 +83,7 @@ conda activate dyna_clust_predict
 Run from the project root:
 
 ``` bash
-sbatch env/create_dyna_clust_env.sh
+sbatch scripts/create_dyna_clust_env.sh
 conda activate dyna_clust_predict
 ```
 
