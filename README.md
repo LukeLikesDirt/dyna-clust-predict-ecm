@@ -92,8 +92,6 @@ conda activate dyna_clust_predict
 From the project root:
 
 ``` bash
-conda activate dyna_clust_predict
-
 sbatch scripts/01_reformat_ITS.sh
 sbatch scripts/02_check_annotations.sh
 sbatch scripts/03_extract_subregions.sh
