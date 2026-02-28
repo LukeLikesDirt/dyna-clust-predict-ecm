@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --time=1-00:00:00
 #SBATCH --partition=day
-#SBATCH --output=%x.%j.out
+#SBATCH --output=slurm/%x.%j.out
 #
 # Create the dyna_clust_predict conda environment.
 # Must be submitted from the project root directory:
