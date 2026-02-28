@@ -1,97 +1,175 @@
 # dyna-clust-predict
 
-Prediction of optimal sequence similarity cut-offs for classification and clustering of metabarcoding data using vsearch global alignment and F-measure optimisation as a confidence measure, following Vu *et al.* (2022).
+Prediction of optimal sequence similarity cut-offs for classification
+and clustering of metabarcoding data using **vsearch global alignment**
+and **F-measure optimisation** as a confidence metric, following Vu *et
+al.* (2022).
+
+------------------------------------------------------------------------
 
 ## Overview
 
-The pipeline takes a curated ITS reference database (EUKARYOME), extracts ITS1 and ITS2 subregions with ITSx, and predicts optimal similarity thresholds at each taxonomic rank for three sequence regions: full ITS, ITS1, and ITS2. This pipeline is conceptually similar to and adapted from [dnabarcoder](https://github.com/vuthuyduong/dnabarcoder), but uses vsearch for global alignment and supports parallel processing to speed up similarity computations and cut-off predictions within an R environment.
+`dyna-clust-predict` predicts optimal sequence similarity thresholds
+across taxonomic ranks using a curated ITS reference database
+(EUKARYOME).
 
-## Pipeline steps
+The pipeline:
 
-| Script | Description |
-|--------|-------------|
-| `scripts/01_reformat_ITS.sh` | Download EUKARYOME, reformat headers, extract taxonomy |
-| `scripts/02_check_annotations.sh` | Standardise infraspecific annotations in classification |
-| `scripts/03_extract_subregions.sh` | Run ITSx to extract ITS1 and ITS2 subregions |
-| `scripts/04_prepare_subsets.sh` | Generate prediction ID files for each region |
-| `scripts/05_compute_sim.sh` | **Optional**: Pre-compute similarity matrices |
-| `scripts/06_predict_cut-offs.sh` | Predict cut-offs for full ITS, ITS1, and ITS2 |
+-   Extracts ITS1 and ITS2 subregions using ITSx\
+-   Computes global pairwise similarity using vsearch\
+-   Optimises similarity cut-offs using F-measure\
+-   Supports parallel processing for efficient large-scale analyses
+
+The workflow is conceptually adapted from
+[dnabarcoder](https://github.com/vuthuyduong/dnabarcoder), but:
+
+-   Uses **vsearch** for global alignment\
+-   Supports scalable parallel computation\
+-   Integrates similarity prediction within an R-based workflow
+
+------------------------------------------------------------------------
+
+## Pipeline structure
 
 All scripts must be run from the **project root directory**.
 
-## Data directory
+### Shell scripts
 
-```
-data/
-├── full_ITS/    # Full ITS sequences, classification, ID files, predictions
-├── ITS1/        # ITS1 subregion sequences, classification, ID files, predictions
-└── ITS2/        # ITS2 subregion sequences, classification, ID files, predictions
-```
+  --------------------------------------------------------------------------------
+  Script                               Description
+  ------------------------------------ -------------------------------------------
+  `scripts/01_reformat_ITS.sh`         Download EUKARYOME, reformat headers,
+                                       extract taxonomy
 
-## R scripts
+  `scripts/02_check_annotations.sh`    Standardise infraspecific annotations
 
-| Script | Description |
-|--------|-------------|
-| `R/utils.R` | Shared utility: `is_identified()` for taxonomy filtering |
-| `R/reformat.R` | Reformat raw EUKARYOME FASTA headers and extract taxonomy |
-| `R/check_annotations.R` | Detect and standardise infraspecific annotations |
-| `R/subset.R` | Generate balanced prediction subsets and ID files |
-| `R/compute_sim.R` | Pre-compute pairwise vsearch similarity matrix |
-| `R/predict.R` | Predict optimal similarity cut-offs (parallel or sequential) |
+  `scripts/03_extract_subregions.sh`   Extract ITS1 and ITS2 using ITSx
+
+  `scripts/04_prepare_subsets.sh`      Generate balanced prediction subsets
+
+  `scripts/05_compute_sim.sh`          *(Optional)* Pre-compute similarity
+                                       matrices
+
+  `scripts/06_predict_cut-offs.sh`     Predict optimal similarity cut-offs
+  --------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+### R modules
+
+  Script                    Description
+  ------------------------- ----------------------------------------------------
+  `R/utils.R`               Shared utility functions (e.g., `is_identified()`)
+  `R/reformat.R`            FASTA header parsing and taxonomy extraction
+  `R/check_annotations.R`   Infraspecific annotation standardisation
+  `R/subset.R`              Balanced taxon subset generation
+  `R/compute_sim.R`         Pairwise similarity computation using vsearch
+  `R/predict.R`             Cut-off prediction (parallel or sequential)
+
+------------------------------------------------------------------------
+
+## Directory structure
+
+    data/
+    ├── full_ITS/    # Full ITS sequences, taxonomy, ID files, predictions
+    ├── ITS1/        # ITS1 sequences, taxonomy, ID files, predictions
+    └── ITS2/        # ITS2 sequences, taxonomy, ID files, predictions
+
+------------------------------------------------------------------------
 
 ## Environment setup
 
-A [conda](https://docs.conda.io/) environment specification is provided in `environment.yml`.
-[mamba](https://mamba.readthedocs.io/) is strongly recommended over `conda` for environment creation due to faster dependency resolution
+A conda environment specification is provided in `environment.yml`.
 
-**Local setup:**
-```bash
+[mamba](https://mamba.readthedocs.io/) is strongly recommended over
+`conda` for faster dependency resolution.
+
+### Local installation
+
+``` bash
 mamba env create -f environment.yml
 conda activate dyna_clust_predict
 ```
 
-**HPC (SLURM) setup** — run from the project root:
-```bash
+### HPC (SLURM)
+
+Run from the project root:
+
+``` bash
 sbatch scripts/create_dyna_clust_env.sh
 conda activate dyna_clust_predict
 ```
 
+------------------------------------------------------------------------
+
 ## Quick start
 
-```bash
-# Activate environment, then from the project root:
+From the project root:
+
+``` bash
 conda activate dyna_clust_predict
 
 sbatch scripts/01_reformat_ITS.sh
 sbatch scripts/02_check_annotations.sh
 sbatch scripts/03_extract_subregions.sh
 sbatch scripts/04_prepare_subsets.sh
-sbatch scripts/05_compute_sim.sh   # optional; similarity is computed on the fly in step 06, which is the preferred for larger datasets and parallel processing
+sbatch scripts/05_compute_sim.sh   # Optional
 sbatch scripts/06_predict_cut-offs.sh
 ```
 
-## Key parameters for sequence selection: `subset.R` run via `04_prepare_subsets.sh`
+> **Note:** Step 05 is optional. Similarity can be computed on-the-fly
+> in Step 06, which is preferred for large datasets and parallel
+> execution.
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| <span style="white-space: nowrap;">`--min_subgroups`</span> | 10 | Minimum number of unique child taxa required per parent taxon |
-| <span style="white-space: nowrap;">`--min_sequences`</span> | 30 | Minimum number of sequences per parent taxon after proportion cap |
-| <span style="white-space: nowrap;">`--max_sequences`</span> | 25000 | Maximum number of sequences per parent taxon; excess is downsampled proportionally across child taxa |
-| <span style="white-space: nowrap;">`--max_proportion`</span> | 0.5 | Maximum fraction a single child taxon may represent within a parent taxon |
+------------------------------------------------------------------------
 
-## Key parameters for similarity prediction: `predict.R` run via `06_predict_cut-offs.sh`
+# Key parameters
 
-`--min_subgroups` (default: 10)  
-Minimum number of unique child taxa required per parent taxon.
+## Sequence selection
 
-`--min_sequences` (default: 30)  
-Minimum number of sequences per parent taxon after proportion cap.
+Used in: `subset.R` (via `04_prepare_subsets.sh`)
 
-`--max_sequences` (default: 25000)  
-Maximum number of sequences per parent taxon. Excess sequences are downsampled proportionally across child taxa.
+These parameters control taxonomic balance and sampling constraints
+prior to similarity prediction.
 
-`--max_proportion` (default: 0.5)  
-Maximum fraction a single child taxon may represent within a parent taxon.
+    --min_subgroups   INT    Minimum unique child taxa per parent (default: 10)
+    --min_sequences   INT    Minimum sequences per parent after proportion cap (default: 30)
+    --max_sequences   INT    Maximum sequences per parent; excess downsampled proportionally (default: 25000)
+    --max_proportion  FLOAT  Maximum fraction a child taxon may represent (default: 0.5)
+
+Example:
+
+``` bash
+Rscript R/subset.R \
+  --min_subgroups 15 \
+  --min_sequences 50 \
+  --max_sequences 20000 \
+  --max_proportion 0.4
+```
+
+------------------------------------------------------------------------
+
+## Similarity prediction
+
+Used in: `predict.R` (via `06_predict_cut-offs.sh`)
+
+The same parameters are applied during cut-off optimisation to ensure
+taxonomic balance during F-measure calculation.
+
+    --min_subgroups
+    --min_sequences
+    --max_sequences
+    --max_proportion
+
+Defaults are identical to those used during subset preparation.
+
+------------------------------------------------------------------------
 
 ## Citation
-Duong Vu, R. Henrik Nilsson, Gerard J.M. Verkley (2022). dnabarcoder: an open-source software package for analyzing and predicting DNA sequence similarity cut-offs for fungal sequence identification. Molecular Ecology Resources. https://doi.org/10.1111/1755-0998.13651
+
+Vu, D., Nilsson, R. H., & Verkley, G. J. M. (2022).\
+*dnabarcoder: an open-source software package for analyzing and
+predicting DNA sequence similarity cut-offs for fungal sequence
+identification.*\
+Molecular Ecology Resources.\
+https://doi.org/10.1111/1755-0998.13651
