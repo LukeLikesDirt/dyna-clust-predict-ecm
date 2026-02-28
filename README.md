@@ -81,14 +81,17 @@ sbatch scripts/06_predict_cut-offs.sh
 
 ## Key parameters for similarity prediction: `predict.R` run via `06_predict_cut-offs.sh`
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--start_threshold` | 0 | Starting similarity threshold |
-| `--end_threshold` | 1 | Ending similarity threshold |
-| `--step` | 0.001 | Threshold step size |
-| `--run_parallel` | yes | Enable parallel dataset processing (yes/no) |
-| `--n_cpus` | all-1 | Number of CPUs available for parallel workers and vsearch threads |
-| `--tmp_dir` | ./tmp | Directory for temporary vsearch output |
+`--min_subgroups` (default: 10)  
+Minimum number of unique child taxa required per parent taxon.
+
+`--min_sequences` (default: 30)  
+Minimum number of sequences per parent taxon after proportion cap.
+
+`--max_sequences` (default: 25000)  
+Maximum number of sequences per parent taxon. Excess sequences are downsampled proportionally across child taxa.
+
+`--max_proportion` (default: 0.5)  
+Maximum fraction a single child taxon may represent within a parent taxon.
 
 ## Citation
 Duong Vu, R. Henrik Nilsson, Gerard J.M. Verkley (2022). dnabarcoder: an open-source software package for analyzing and predicting DNA sequence similarity cut-offs for fungal sequence identification. Molecular Ecology Resources. https://doi.org/10.1111/1755-0998.13651
