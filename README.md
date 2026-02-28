@@ -130,7 +130,7 @@ Rscript R/subset.R \
   --min_sequences 30 \
   --max_sequences 25000 \
   --max_proportion 0.5 \
-  --output_dir output/
+  --output_dir output
 ```
 
 ## Similarity prediction
