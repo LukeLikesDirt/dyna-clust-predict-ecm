@@ -759,6 +759,8 @@ for (rank in rank_list) {
   })
 
   # ── Map over datasets (parallel or sequential via furrr) ──────────────────
+  # .progress = FALSE: in non-TTY contexts (SLURM) progressr prints a new line
+  # per completed task rather than updating in-place, flooding the log file.
   results_list <- future_map(
     args_list,
     function(a) {
@@ -782,33 +784,54 @@ for (rank in rank_list) {
       )
     },
     .options  = furrr_options(seed = NULL),
-    .progress = TRUE
+    .progress = FALSE
   )
 
   # ── Collect results and update pred_datasets ──────────────────────────────
-  for (res in results_list) {
-    if (res$skip) {
-      cat(res$msg, "\n")
-      next
-    }
-    dn     <- res$dataset_name
-    result <- res$result
+  # For small runs (≤ 100 datasets) print one line per result so test output
+  # is readable.  For large runs print a progress summary every ~5% to avoid
+  # flooding the SLURM log with tens of thousands of lines.
+  verbose_per_dataset <- n_datasets <= 100L
+  report_every        <- if (verbose_per_dataset) 1L else max(1L, floor(n_datasets / 20L))
+  n_done    <- 0L
+  n_cutoffs <- 0L
+  n_skipped <- 0L
+  n_errors  <- 0L
 
-    if (!result$error) {
-      cat(sprintf("[predict] %s: cutoff=%.4f  F=%.4f  (seqs=%d  groups=%d)\n",
-                  dn, result$opt_t, result$best_f, res$n_seqs, res$n_groups))
-      pred_datasets[[dn]] <- list(
-        "cut-off"         = result$opt_t,
-        "confidence"      = result$best_f,
-        "sequence number" = res$n_seqs,
-        "group number"    = res$n_groups,
-        "max proportion"  = res$max_prop,
-        "fmeasures"       = result$fmeasures_dict
-      )
+  for (res in results_list) {
+    n_done <- n_done + 1L
+    if (res$skip) {
+      n_skipped <- n_skipped + 1L
+      if (verbose_per_dataset) cat(res$msg, "\n")
     } else {
-      cat(sprintf("[predict] WARNING: no similarity data for '%s', skipped.\n", dn))
+      dn     <- res$dataset_name
+      result <- res$result
+      if (!result$error) {
+        n_cutoffs <- n_cutoffs + 1L
+        if (verbose_per_dataset) {
+          cat(sprintf("[predict] %s: cutoff=%.4f  F=%.4f  (seqs=%d  groups=%d)\n",
+                      dn, result$opt_t, result$best_f, res$n_seqs, res$n_groups))
+        }
+        pred_datasets[[dn]] <- list(
+          "cut-off"         = result$opt_t,
+          "confidence"      = result$best_f,
+          "sequence number" = res$n_seqs,
+          "group number"    = res$n_groups,
+          "max proportion"  = res$max_prop,
+          "fmeasures"       = result$fmeasures_dict
+        )
+      } else {
+        n_errors <- n_errors + 1L
+        cat(sprintf("[predict] WARNING: no similarity data for '%s', skipped.\n", dn))
+      }
+    }
+    if (!verbose_per_dataset && (n_done %% report_every == 0L || n_done == n_datasets)) {
+      cat(sprintf("[predict]   %d/%d datasets  cutoffs: %d  skipped: %d\n",
+                  n_done, n_datasets, n_cutoffs, n_skipped))
     }
   }
+  cat(sprintf("[predict] Rank %s: %d cutoff(s) from %d dataset(s) (%d skipped, %d error(s)).\n",
+              rank, n_cutoffs, n_datasets, n_skipped, n_errors))
 
   prediction_dict[[rank]] <- pred_datasets
 
