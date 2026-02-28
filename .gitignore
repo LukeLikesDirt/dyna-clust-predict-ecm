@@ -1,0 +1,32 @@
+# Data files (large; managed outside git)
+data/full_ITS/
+data/ITS1/
+data/ITS2/
+
+# Temporary working files
+tmp/
+
+# SLURM log output
+slurm/
+
+# Similarity matrices (large binary-ish files)
+*.sim
+
+# Prediction output
+*.predicted
+*.cutoffs.json
+*.cutoffs.json.txt
+
+# R session artefacts
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# macOS
+.DS_Store
+
+# Compressed archives
+*.zip
+*.gz
+*.tar

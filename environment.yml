@@ -1,0 +1,25 @@
+name: dyna_clust_predict
+
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # R — version constraint ensures data.table >= 1.15 and furrr >= 0.3
+  - r-base>=4.2
+  - r-optparse
+  - r-data.table
+  - r-dplyr
+  - r-readr
+  - r-stringr
+  - r-tidyr
+  - r-furrr
+  - r-future
+  - r-jsonlite
+
+  # Bioinformatics tools
+  - vsearch>=2.21      # --allpairs_global --userfields support
+  - itsx>=1.1          # --multi_thread and current HMM profiles
+  - hmmer>=3.3         # required by ITSx
+  - seqkit>=2.0
