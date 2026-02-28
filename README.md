@@ -72,12 +72,12 @@ sbatch scripts/06_predict_cut-offs.sh
 
 ## Key parameters for sequence selection: `subset.R` run via `04_prepare_subsets.sh`
 
-| Argument          | Default | Description |
-|-------------------|---------|-------------|
-| `--min_subgroups` | 10 | Minimum number of unique child taxa required per parent taxon |
-| `--min_sequences` | 30 | Minimum number of sequences per parent taxon after proportion cap |
-| `--max_sequences` | 25000 | Maximum number of sequences per parent taxon; excess is downsampled proportionally across child taxa |
-| `--max_proportion` | 0.5 | Maximum fraction a single child taxon may represent within a parent taxon |
+| Argument | Default | Description |
+|----------|---------|-------------|
+|<nobr>`--min_subgroups`</nobr>| 10 | Minimum number of unique child taxa required per parent taxon |
+|<nobr>`--min_sequences`</nobr>| 30 | Minimum number of sequences per parent taxon after proportion cap |
+|<nobr>`--max_sequences`</nobr>| 25000 | Maximum number of sequences per parent taxon; excess is downsampled proportionally across child taxa |
+|<nobr>`--max_proportion`</nobr>| 0.5 | Maximum fraction a single child taxon may represent within a parent taxon |
 
 ## Key parameters for similarity prediction: `predict.R` run via `06_predict_cut-offs.sh`
 
