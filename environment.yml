@@ -17,6 +17,7 @@ dependencies:
   - r-furrr
   - r-future
   - r-jsonlite
+  - bioconductor-biostrings
 
   # Bioinformatics tools
   - vsearch>=2.21      # --allpairs_global --userfields support
