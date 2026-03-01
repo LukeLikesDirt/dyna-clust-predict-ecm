@@ -403,6 +403,8 @@ max_proportion <- function(classes) {
 #
 # Caches F-measures from a previous run (in `existing`) to allow incremental
 # computation when adding new threshold ranges.
+# When the best F-measure is achieved by multiple thresholds, the middle
+# threshold of the tied range is selected (rather than the lowest).
 # verbose = FALSE suppresses per-threshold output; used inside parallel workers.
 
 predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
@@ -411,14 +413,6 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
                             verbose = TRUE) {
   # Restore any previously computed F-measures for this dataset
   saved_fm <- if ("fmeasures"  %in% names(existing)) existing$fmeasures   else list()
-  opt_t    <- if ("cut-off"    %in% names(existing)) existing[["cut-off"]] else 0
-  best_f   <- if ("confidence" %in% names(existing)) existing$confidence   else 0
-
-  # Reset cached optimum when redo is requested or threshold range has changed
-  if (redo || opt_t < start_t || (end_t > 0 && opt_t > end_t)) {
-    opt_t  <- 0
-    best_f <- 0
-  }
 
   # Pre-filter the similarity matrix to only this dataset's sequences
   sub_sim <- sim_dt[i %chin% seq_ids & j %chin% seq_ids]
@@ -552,16 +546,23 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
     t_str <- sprintf("%.4f", t)
     thresholds[k] <- t
     fmeasures[k]  <- all_fm[[t_str]] %||% 0
-
-    if (fmeasures[k] > best_f || (fmeasures[k] == best_f && t < opt_t)) {
-      best_f <- fmeasures[k]
-      opt_t  <- t
-    }
   }
 
+  # Select the middle threshold among all thresholds tied at the best F-measure
+  best_f      <- max(fmeasures)
+  tied_idx    <- which(fmeasures == best_f)
+  mid_pos     <- tied_idx[ceiling(length(tied_idx) / 2)]
+  opt_t       <- thresholds[mid_pos]
+
   if (verbose) {
-    cat(sprintf("[predict] %s: optimal cutoff=%.4f  F-measure=%.4f\n",
-                dataset_name, opt_t, best_f))
+    if (length(tied_idx) > 1) {
+      cat(sprintf("[predict] %s: F=%.4f tied over %d thresholds (%.4f\u2013%.4f), selecting middle: %.4f\n",
+                  dataset_name, best_f, length(tied_idx),
+                  thresholds[tied_idx[1]], thresholds[tied_idx[length(tied_idx)]], opt_t))
+    } else {
+      cat(sprintf("[predict] %s: optimal cutoff=%.4f  F-measure=%.4f\n",
+                  dataset_name, opt_t, best_f))
+    }
   }
 
   list(
