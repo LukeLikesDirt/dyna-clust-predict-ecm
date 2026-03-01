@@ -617,7 +617,7 @@ save_results <- function(prediction_dict, output_file, cutoffs_file,
 
   # Tab-delimited plain-text summary
   txt_file <- paste0(cutoffs_file, ".txt")
-  header   <- paste(c("Rank", "Dataset", "cut-off", "confidence",
+  header   <- paste(c("rank", "higher_rank", "dataset", "cut-off", "confidence",
                        "sequence number", "group number", "max proportion"),
                     collapse = "\t")
   rows <- header
@@ -625,7 +625,9 @@ save_results <- function(prediction_dict, output_file, cutoffs_file,
     for (dname in names(final[[rank]])) {
       d <- final[[rank]][[dname]]
       rows <- c(rows, paste(
-        rank, dname,
+        rank,
+        d[["higher_rank"]]     %||% "global",
+        dname,
         d[["cut-off"]]         %||% 0,
         d[["confidence"]]      %||% 0,
         d[["sequence number"]] %||% 0,
@@ -813,6 +815,7 @@ for (rank in rank_list) {
                       dn, result$opt_t, result$best_f, res$n_seqs, res$n_groups))
         }
         pred_datasets[[dn]] <- list(
+          "higher_rank"     = if (nchar(higher_rank_str) > 0) higher_rank_str else "global",
           "cut-off"         = result$opt_t,
           "confidence"      = result$best_f,
           "sequence number" = res$n_seqs,
