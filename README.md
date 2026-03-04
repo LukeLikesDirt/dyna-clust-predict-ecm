@@ -13,16 +13,16 @@ across taxonomic ranks using a curated ITS reference database
 
 The pipeline:
 
--   Extracts ITS1 and ITS2 subregions using ITSx\
--   Computes global pairwise similarity using vsearch\
--   Optimises similarity cut-offs using F-measure\
+-   Extracts ITS1 and ITS2 subregions using ITSx
+-   Computes global pairwise similarity using vsearch
+-   Optimises similarity cut-offs using F-measure
 -   Supports parallel processing for efficient large-scale analyses
 
 The workflow is conceptually adapted from
 [dnabarcoder](https://github.com/vuthuyduong/dnabarcoder), but:
 
--   Uses **vsearch** for global alignment\
--   Supports scalable parallel computation\
+-   Uses **vsearch** for global alignment
+-   Supports scalable parallel computation
 -   Integrates similarity prediction within an R-based workflow
 
 ## Pipeline steps
@@ -39,7 +39,14 @@ The workflow is conceptually adapted from
   `scripts/05_compute_sim.sh`          *(Optional)* Pre-compute similarity
                                        matrices
 
-  `scripts/06_predict_cutoffs.sh`      Predict optimal similarity cut-offs
+  `scripts/06a_predict_cutoffs.sh`     Predict optimal similarity cut-offs
+                                       (all regions sequentially in one job)
+
+  `scripts/06b_launch_all_regions.sh`  Submit one SLURM job per region
+                                       (full_ITS, ITS1, ITS2) in parallel
+
+  `scripts/06b_predict_cutoffs_region.sh`  Worker script for a single region
+                                           (called by `06b_launch_all_regions.sh`)
 
 All scripts must be run from the **project root directory**.
 
@@ -97,12 +104,19 @@ sbatch scripts/02_check_annotations.sh
 sbatch scripts/03_extract_subregions.sh
 sbatch scripts/04_prepare_subsets.sh
 sbatch scripts/05_compute_sim.sh   # Optional
-sbatch scripts/06_predict_cutoffs.sh
+
+# Step 06 — choose one:
+sbatch scripts/06a_predict_cutoffs.sh              # All regions in one job
+bash   scripts/06b_launch_all_regions.sh            # One job per region (parallel)
 ```
 
 > **Note:** Step 05 is optional. Similarity can be computed on-the-fly
 > in Step 06, which is preferred for large datasets and parallel
 > execution.
+>
+> `06a` runs all three regions sequentially in a single SLURM job.
+> `06b` submits three independent jobs (one per region) so they run in
+> parallel — faster overall but uses more nodes.
 
 # Key parameters
 
@@ -133,7 +147,7 @@ Rscript R/subset.R \
 
 ## Similarity prediction
 
-Used in: `predict.R` (via `06_predict_cutoffs.sh`)
+Used in: `predict.R` (via `06a_predict_cutoffs.sh` / `06b_predict_cutoffs_region.sh`)
 
 These parameters select the rank combination to predict:
 
