@@ -1,13 +1,15 @@
 #!/usr/bin/env Rscript
 # predict.R — Predict optimal similarity cutoffs for DNA barcoding taxonomy.
 #
-# Unified script merging predict_vsearch.R and predict_vsearch_parallel.R.
-# Supports both sequential and parallel (furrr/future) dataset processing,
-# controlled by --run_parallel (default: yes).  Parallel/sequential mode does
-# NOT affect which packages are loaded — all packages are always loaded.
+# This scritp is adapted from  the predict function in dnabarcoder: 
+# https://github.com/vuthuyduong/dnabarcoder
 #
 # Uses vsearch --allpairs_global (global alignment) for similarity computation.
 # A pre-computed .sim file may be supplied via --sim to skip that step.
+#
+# Supports both sequential and parallel (furrr/future) dataset processing,
+# controlled by --run_parallel (default: yes).
+#
 #
 # Usage:
 #   Rscript R/predict.R \
@@ -74,7 +76,7 @@ option_list <- list(
               help = "Target rank(s) to predict, comma-separated (e.g. species,genus) [required]"),
   make_option("--higher_rank",
               type = "character", default = "", metavar = "STR",
-              help = paste("Higher rank(s) for local prediction, comma-separated (e.g. genus).",
+              help = paste("Higher rank(s) for local prediction, comma-separated (e.g. genus,family).",
                            "Omit for a single global prediction across all sequences.",
                            "[default: \"\"]")),
   make_option("--start_threshold",
@@ -96,7 +98,7 @@ option_list <- list(
               type = "integer", default = 30L, metavar = "INT",
               help = "Min sequences required to report a cutoff [default: %default]"),
   make_option("--max_seq_no",
-              type = "integer", default = 20000L, metavar = "INT",
+              type = "integer", default = 25000L, metavar = "INT",
               help = "Max sequences per dataset; excess is randomly sampled [default: %default]"),
   make_option("--max_proportion",
               type = "double", default = 1.0, metavar = "NUM",
@@ -286,7 +288,7 @@ save_sim <- function(sim_dt, path) {
 
 # ── Write a subset of sequences to a temporary FASTA file ─────────────────────
 # Fixed version: uses h_idx[p] to look up the line number of the p-th header,
-# avoiding the off-by-one bug present in the original predict_vsearch.R where
+# avoiding the off-by-one bug present in the original predict.R where
 # `h` was incorrectly set to `p` rather than `h_idx[p]`.
 
 write_subset_fasta <- function(fasta_file, ids, out_path) {
@@ -304,7 +306,6 @@ write_subset_fasta <- function(fasta_file, ids, out_path) {
 }
 
 # ── Load the classification table ─────────────────────────────────────────────
-# Uses fread() for fast loading of large TSV files.
 
 load_classification <- function(class_file, ranks, higher_ranks, id_col = "id") {
   cat("[predict] Loading classification from:", class_file, "\n")
@@ -320,7 +321,7 @@ load_classification <- function(class_file, ranks, higher_ranks, id_col = "id") 
 }
 
 # ── Remove sequences with unidentified / uncertain taxonomy ───────────────────
-# Delegates to is_identified() from utils.R so filtering logic is centralised.
+# Delegates to is_identified() from utils.R for logic centralised filtering.
 
 filter_unidentified_rows <- function(cls, rank) {
   cls[is_identified(cls[[rank]]), ]
@@ -329,7 +330,7 @@ filter_unidentified_rows <- function(cls, rank) {
 # ── Generate datasets (global or local by higher-rank taxon) ──────────────────
 # Returns a named list of character vectors of sequence IDs.
 # Global mode: one dataset named "All" containing all valid sequences.
-# Local mode:  one dataset per unique value of each higher_rank column.
+# Local mode: one dataset per unique value of each higher_rank column.
 
 generate_datasets <- function(seq_ids, cls, rank, higher_ranks,
                               id_col = "id", max_seq_no = 20000) {
@@ -363,7 +364,7 @@ generate_datasets <- function(seq_ids, cls, rank, higher_ranks,
 }
 
 # ── Group sequences by taxonomic class ────────────────────────────────────────
-# Returns a named list of character vectors (class name → member IDs).
+# Returns a named list of character vectors (class name -> member IDs).
 
 load_classes <- function(seq_ids, cls, rank, id_col = "id") {
   cls_sub <- filter_unidentified_rows(cls[cls[[id_col]] %in% seq_ids, ], rank)
@@ -389,12 +390,12 @@ max_proportion <- function(classes) {
 #
 # New approach (O(E log E + T × C × K) total, where C = classes, K = clusters):
 #   1. Sort edges by score descending (once).
-#   2. Sweep thresholds from high → low.  At each step, add only the *new*
+#   2. Sweep thresholds from high -> low.  At each step, add only the *new*
 #      edges whose score falls into [t, t+step) and merge components via
-#      union-find with path compression + union by rank → O(α(N)) per edge.
+#      union-find with path compression + union by rank -> O(α(N)) per edge.
 #   3. Maintain a contingency table (cluster root × class) incrementally.
-#      On merge, just add the two root vectors → O(C) per merge.
-#   4. Compute F-measure from the contingency table → O(active_roots × C) per
+#      On merge, just add the two root vectors -> O(C) per merge.
+#   4. Compute F-measure from the contingency table -> O(active_roots × C) per
 #      threshold, much cheaper than set intersections.
 #
 # The result is identical to the old approach but typically 10–30× faster for
@@ -422,7 +423,7 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
     return(list(error = TRUE))
   }
 
-  # ── Map string IDs → integers for fast union-find ───────────────────────────
+  # ── Map string IDs -> integers for fast union-find ──────────────────────────
   n         <- length(seq_ids)
   id_to_int <- setNames(seq_len(n), seq_ids)
 
@@ -513,7 +514,7 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
     round(total_f / total_n, 4)
   }
 
-  # ── Sweep thresholds high → low (add edges as threshold decreases) ─────────
+  # ── Sweep thresholds high -> low (add edges as threshold decreases) ─────────
   thresholds_desc <- rev(seq(round(start_t, 4), round(end_t, 4), by = step_t))
   edge_ptr <- 1L   # next edge to process (edges sorted descending by score)
   all_fm   <- list()
@@ -792,43 +793,68 @@ for (rank in rank_list) {
   #   Batch 2 — small datasets:  many workers × 1 vsearch thread.
   #   When a pre-computed sim file was loaded vsearch is never called, so all
   #   datasets go into the small (high-worker) batch.
-  large_threshold <- 500L
-  has_sim         <- nrow(sim_dt) > 0
+  # ── Scaled threading: vsearch threads scale linearly with dataset size ──
+  #
+  # Rationale: large datasets need more vsearch threads for the O(N²) pairwise
+  # alignment but that means fewer concurrent workers, keeping total CPU usage
+  # ≈ n_cpus while reducing per-worker memory (the OOM-kill root cause).
+  #
+  # Scaling schedule (linear interpolation):
+  #   < 400 seqs  -> 1  vsearch thread  (tiny; maximise workers)
+  #   400 seqs    -> 2  vsearch threads
+  #   ≈12 500 seqs -> n_cpus vsearch threads (single worker gets all CPUs)
+  #
+  # The schedule rounds to the nearest value in {1,2,4,8,16,24,32,40,...}
+  # so workers divide evenly into n_cpus.
 
+  has_sim  <- nrow(sim_dt) > 0
   ds_sizes <- sapply(datasets, length)
+
+  # Permitted thread counts (powers-of-2 only, up to n_cpus). Every tier
+  # evenly divides n_cpus so all CPUs stay busy (e.g. 32/4 = 8 workers).
+  thread_steps <- 2L^(0:floor(log2(n_cpus)))
+  thread_steps <- unique(sort(c(thread_steps, n_cpus)))
+  thread_steps <- thread_steps[thread_steps <= n_cpus]
+
+  # Linear interpolation helper
+  SCALE_MIN_SIZE    <- 400
+  SCALE_MAX_SIZE    <- 12500
+  SCALE_MIN_THREADS <- 2L
+  SCALE_MAX_THREADS <- n_cpus
+
+  compute_threads <- function(ds_size) {
+    if (ds_size < SCALE_MIN_SIZE) return(1L)
+    raw <- SCALE_MIN_THREADS +
+      (ds_size - SCALE_MIN_SIZE) *
+      (SCALE_MAX_THREADS - SCALE_MIN_THREADS) /
+      (SCALE_MAX_SIZE - SCALE_MIN_SIZE)
+    raw <- max(SCALE_MIN_THREADS, min(SCALE_MAX_THREADS, raw))
+    # Snap to the nearest permitted thread step
+    as.integer(thread_steps[which.min(abs(thread_steps - raw))])
+  }
+
+  # Assign threads per dataset (1 thread if pre-computed sim available)
   if (has_sim) {
-    large_names <- character(0)
-    small_names <- names(datasets)
+    thread_assignments <- setNames(rep(1L, length(ds_sizes)), names(ds_sizes))
   } else {
-    large_names <- names(ds_sizes[ds_sizes >= large_threshold])
-    small_names <- names(ds_sizes[ds_sizes <  large_threshold])
+    thread_assignments <- setNames(
+      vapply(ds_sizes, compute_threads, integer(1)),
+      names(ds_sizes)
+    )
   }
 
-  # --- Threading parameters for each batch ---
-  # Large batch: give vsearch enough threads but keep several workers busy.
-  large_vsearch_threads <- min(8L, n_cpus)
-  large_workers         <- max(1L, floor(n_cpus / large_vsearch_threads))
-  # Small batch: 1 vsearch thread per worker → maximise R concurrency.
-  small_vsearch_threads <- 1L
-  small_workers         <- min(length(small_names), n_cpus)
+  # Group datasets into tiers by their thread count
+  tier_levels <- sort(unique(thread_assignments))
 
-  cat(sprintf(
-    "[predict] %d dataset(s), largest=%d seqs (%d large, %d small, threshold=%d).\n",
-    n_datasets, max_ds_size, length(large_names), length(small_names),
-    large_threshold
-  ))
-  if (length(large_names) > 0) {
+  cat(sprintf("[predict] %d dataset(s), largest=%d seqs, %d tier(s) (threads scaled %d->%d).\n",
+              n_datasets, max_ds_size, length(tier_levels),
+              min(tier_levels), max(tier_levels)))
+  for (thr in tier_levels) {
+    tier_ns <- names(thread_assignments[thread_assignments == thr])
+    tier_workers <- max(1L, floor(n_cpus / thr))
     cat(sprintf(
-      "[predict]   Batch 1 (large): %d dataset(s) → %d worker(s) × %d vsearch thread(s).\n",
-      length(large_names), min(length(large_names), large_workers),
-      large_vsearch_threads
-    ))
-  }
-  if (length(small_names) > 0) {
-    cat(sprintf(
-      "[predict]   Batch 2 (small): %d dataset(s) → %d worker(s) × %d vsearch thread(s).\n",
-      length(small_names), min(length(small_names), small_workers),
-      small_vsearch_threads
+      "[predict]   Tier %2d-thread: %3d dataset(s) -> %d worker(s) × %d vsearch thread(s).\n",
+      thr, length(tier_ns), min(length(tier_ns), tier_workers), thr
     ))
   }
 
@@ -846,19 +872,19 @@ for (rank in rank_list) {
     })
   }
 
-  # ── Helper: run one batch via future_map ──────────────────────────────────
+  # ── Helper: run one batch via future_map (with sequential fallback) ──────
+  #
+  # When parallel execution crashes (typically because the Linux OOM killer
+  # terminates a forked child), the batch is automatically re-run
+  # sequentially so that (a) the specific failing datasets are identified
+  # by name and (b) the error message / reason is captured in the log.
+
   run_batch <- function(args_list, batch_workers, batch_vsearch_threads) {
     if (length(args_list) == 0) return(list())
-    if (run_parallel) {
-      if (.Platform$OS.type == "unix") {
-        plan(multicore,    workers = min(length(args_list), batch_workers))
-      } else {
-        plan(multisession, workers = min(length(args_list), batch_workers))
-      }
-    }
-    future_map(
-      args_list,
-      function(a) {
+
+    # ── Inner helper: process one dataset with error trapping ─────────────
+    do_one <- function(a, vthreads) {
+      tryCatch(
         process_dataset(
           dataset_name    = a$dataset_name,
           ds_ids          = a$ds_ids,
@@ -874,26 +900,75 @@ for (rank in rank_list) {
           redo            = redo,
           existing        = a$existing,
           max_prop_limit  = max_prop_limit,
-          vsearch_threads = batch_vsearch_threads,
+          vsearch_threads = vthreads,
           tmp_dir         = tmp_dir
+        ),
+        error = function(e) {
+          list(
+            skip         = FALSE,
+            dataset_name = a$dataset_name,
+            result       = list(error    = TRUE,
+                                error_msg = conditionMessage(e)),
+            n_seqs       = length(a$ds_ids),
+            n_groups     = NA_integer_,
+            max_prop     = NA_real_
+          )
+        }
+      )
+    }
+
+    # ── Attempt parallel execution ───────────────────────────────────────
+    if (run_parallel) {
+      if (.Platform$OS.type == "unix") {
+        plan(multicore,    workers = min(length(args_list), batch_workers))
+      } else {
+        plan(multisession, workers = min(length(args_list), batch_workers))
+      }
+
+      parallel_ok <- tryCatch({
+        result <- future_map(
+          args_list,
+          function(a) do_one(a, batch_vsearch_threads),
+          .options  = furrr_options(seed = NULL, chunk_size = 1L),
+          .progress = FALSE
         )
-      },
-      .options  = furrr_options(seed = NULL, chunk_size = 1L),
-      .progress = FALSE
-    )
+        TRUE
+      }, error = function(e) {
+        cat(sprintf(
+          "\n[predict] WARNING: Parallel batch crashed — %s\n",
+          conditionMessage(e)
+        ))
+        cat("[predict]   This is typically caused by the OS OOM (out-of-memory) killer\n")
+        cat("[predict]   terminating forked child processes.\n")
+        cat("[predict]   Falling back to sequential processing to identify failing datasets...\n\n")
+        FALSE
+      })
+
+      if (parallel_ok) return(result)
+    }
+
+    # ── Sequential fallback (or non-parallel mode) ───────────────────────
+    plan(sequential)
+    lapply(args_list, function(a) {
+      cat(sprintf("[predict]   Sequential: processing '%s' (%d seqs)...\n",
+                  a$dataset_name, length(a$ds_ids)))
+      res <- do_one(a, n_cpus)   # give all threads to the single dataset
+      if (!is.null(res$result$error_msg)) {
+        cat(sprintf("[predict]   >>> FAILED '%s': %s\n",
+                    a$dataset_name, res$result$error_msg))
+      }
+      res
+    })
   }
 
-  # ── Run Batch 1: large datasets (fewer workers, multi-threaded vsearch) ──
-  results_large <- run_batch(
-    make_args(large_names), large_workers, large_vsearch_threads
-  )
-
-  # ── Run Batch 2: small datasets (many workers, 1 vsearch thread) ─────────
-  results_small <- run_batch(
-    make_args(small_names), small_workers, small_vsearch_threads
-  )
-
-  results_list <- c(results_large, results_small)
+  # ── Run tiered batches (smallest datasets first -> largest last) ──────────
+  results_list <- list()
+  for (thr in tier_levels) {
+    tier_names   <- names(thread_assignments[thread_assignments == thr])
+    tier_workers <- max(1L, floor(n_cpus / thr))
+    tier_results <- run_batch(make_args(tier_names), tier_workers, thr)
+    results_list <- c(results_list, tier_results)
+  }
 
   # ── Collect results and update pred_datasets ──────────────────────────────
   # For small runs (≤ 100 datasets) print one line per result so test output
@@ -931,7 +1006,9 @@ for (rank in rank_list) {
         )
       } else {
         n_errors <- n_errors + 1L
-        cat(sprintf("[predict] WARNING: no similarity data for '%s', skipped.\n", dn))
+        err_detail <- if (!is.null(result$error_msg)) result$error_msg
+                      else "no similarity data or unknown error"
+        cat(sprintf("[predict] ERROR: dataset '%s' failed \u2014 %s\n", dn, err_detail))
       }
     }
     if (!verbose_per_dataset && (n_done %% report_every == 0L || n_done == n_datasets)) {
@@ -941,6 +1018,21 @@ for (rank in rank_list) {
   }
   cat(sprintf("[predict] Rank %s: %d cutoff(s) from %d dataset(s) (%d skipped, %d error(s)).\n",
               rank, n_cutoffs, n_datasets, n_skipped, n_errors))
+
+  # ── Log a summary of all failed datasets (if any) ──────────────────────
+  if (n_errors > 0L) {
+    failed_names <- character(0)
+    for (res in results_list) {
+      if (!isTRUE(res$skip) && isTRUE(res$result$error)) {
+        failed_names <- c(failed_names, res$dataset_name)
+      }
+    }
+    cat(sprintf("[predict] *** %d dataset(s) FAILED for rank '%s':\n", n_errors, rank))
+    for (fn in failed_names) cat(sprintf("[predict]     - %s\n", fn))
+    cat("[predict] *** Likely cause: OS OOM killer terminated the worker process.\n")
+    cat("[predict]     Consider reducing --max_seq_no, requesting more memory in SLURM,\n")
+    cat("[predict]     or processing these datasets with --run_parallel no.\n")
+  }
 
   prediction_dict[[rank]] <- pred_datasets
 }

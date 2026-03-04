@@ -122,6 +122,9 @@ echo "Activating conda environment..."
 source ~/.bashrc
 conda activate dyna_clust_predict
 
+# Track failures for the end-of-job summary
+declare -a FAILED_STEPS=()
+
 # =============================================================================
 # INPUT VALIDATION
 # =============================================================================
@@ -202,8 +205,25 @@ for region in "${REGIONS[@]}"; do
                 --tmp_dir        "$TMP_DIR" \
                 --out            "./data/${region}"
 
-            if [[ $? -ne 0 ]]; then
-                echo "  WARNING: predict.R failed for ${region}/${target} within ${parent}" >&2
+            rc=$?
+            if [[ $rc -ne 0 ]]; then
+                echo "" >&2
+                echo "  ============================================================" >&2
+                echo "  FAILED: ${region}/${target} within ${parent}  (exit code $rc)" >&2
+                echo "  Time of failure: $(date)" >&2
+                echo "  Memory at failure (RSS peak of this job):" >&2
+                echo "    $(grep VmPeak /proc/$$/status 2>/dev/null || echo 'N/A')" >&2
+                echo "    $(grep VmRSS  /proc/$$/status 2>/dev/null || echo 'N/A')" >&2
+                if command -v sstat &>/dev/null && [[ -n "${SLURM_JOB_ID:-}" ]]; then
+                    echo "  SLURM memory usage:" >&2
+                    sstat -j "${SLURM_JOB_ID}.batch" --format=JobID,MaxRSS,MaxVMSize 2>/dev/null || true
+                fi
+                echo "  If the R output above mentions 'FutureInterruptError' or" >&2
+                echo "  'parallel job did not deliver a result', the likely cause" >&2
+                echo "  is the OS OOM killer terminating worker processes." >&2
+                echo "  ============================================================" >&2
+                echo "" >&2
+                FAILED_STEPS+=("${region}/${target} within ${parent}")
             else
                 echo "  Finished at: $(date)"
             fi
@@ -255,8 +275,15 @@ for region in "${REGIONS[@]}"; do
             --tmp_dir        "$TMP_DIR" \
             --out            "./data/${region}"
 
-        if [[ $? -ne 0 ]]; then
-            echo "  WARNING: global predict.R failed for ${region}/${target}" >&2
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "" >&2
+            echo "  ============================================================" >&2
+            echo "  FAILED: ${region}/global ${target}  (exit code $rc)" >&2
+            echo "  Time of failure: $(date)" >&2
+            echo "  ============================================================" >&2
+            echo "" >&2
+            FAILED_STEPS+=("${region}/global ${target}")
         else
             echo "  Finished at: $(date)"
         fi
@@ -280,8 +307,24 @@ echo "Removing tmp directory..."
 rm -rf "$TMP_DIR"
 
 echo ""
-echo "=== PIPELINE COMPLETED SUCCESSFULLY ==="
-echo "$(date)"
+if [[ ${#FAILED_STEPS[@]} -gt 0 ]]; then
+    echo "=== PIPELINE COMPLETED WITH ${#FAILED_STEPS[@]} FAILURE(S) ==="
+    echo "$(date)"
+    echo ""
+    echo "Failed steps:"
+    for step in "${FAILED_STEPS[@]}"; do
+        echo "  - ${step}"
+    done
+    echo ""
+    echo "Likely cause: OS OOM (out-of-memory) killer terminated worker processes."
+    echo "Possible fixes:"
+    echo "  1. Request more memory in SLURM (#SBATCH --mem=...)."
+    echo "  2. Reduce --max_seq_no (currently ${max_seq_no:-25000}) to lower per-dataset memory."
+    echo "  3. Reduce --n_cpus to run fewer parallel workers."
+else
+    echo "=== PIPELINE COMPLETED SUCCESSFULLY ==="
+    echo "$(date)"
+fi
 echo ""
 echo "Cutoff files written to data/full_ITS, data/ITS1, data/ITS2"
 echo "  Local cutoffs  : ${PREFIX}.cutoffs.json (per region)"
