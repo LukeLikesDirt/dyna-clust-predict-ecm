@@ -2,6 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
+#SBATCH --mem-per-cpu=3950
 #SBATCH --time=60-00:00:00
 #SBATCH --partition=long
 #SBATCH --nodelist=ltu-hpc-2
