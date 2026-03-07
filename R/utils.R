@@ -19,8 +19,11 @@
 
 is_identified <- function(x) {
   !is.na(x) &
-    nzchar(x) &
-    !grepl("^unidentified$|^unclassified$|^uncultured", x, ignore.case = TRUE) &
-    !grepl("incertae[ _.-]sedis",                        x, ignore.case = TRUE) &
-    !grepl("[ _.-]sp\\.",                                x, ignore.case = TRUE)
+  nzchar(x) &
+  !grepl("^unidentified$|^unclassified$|^uncultured", x, ignore.case = TRUE) &
+  !grepl("incertae[ _.-]sedis",                       x, ignore.case = TRUE) &
+  !grepl("[ _.-]sp\\.",                               x, ignore.case = TRUE) &
+  !grepl("Unispike1|Unispike2|Unispike3",             x, ignore.case = TRUE) &
+  !grepl("Archaea|Bacteria",                          x, ignore.case = TRUE) &
+  !grepl("mitochondrion|nucleomorph|plastid",         x, ignore.case = TRUE) 
 }
