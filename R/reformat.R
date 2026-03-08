@@ -119,15 +119,6 @@ classification_df <- fasta_df %>%
     family = ifelse(grepl("\\.fam", family), "unidentified", family),
     genus  = ifelse(grepl("\\.gen", genus),  "unidentified", genus)
   ) %>%
-  # Parenthetical names: replace ( ) with __ for downstream parsing
-  mutate(
-    across(
-      c(phylum, class, order, family, genus),
-      ~ ifelse(grepl("\\(", .x),
-               str_replace_all(str_replace_all(.x, "\\(", "__"), "\\)", "__"),
-               .x)
-    )
-  ) %>%
   # Construct species names
   mutate(
     species = case_when(
