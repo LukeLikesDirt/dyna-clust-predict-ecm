@@ -1,23 +1,28 @@
 #!/usr/bin/env Rscript
 # subset.R — Prepare sequence subsets and ID files for prediction
 #
-# Produces three sets of plain-text ID files (one sequence ID per line) so
-# the global FASTA and classification table can be filtered at prediction time.
+# Only sequences identified to species rank with at least 3 unique sequences
+# per species are used as the base pool for all ID-list generation steps.
 #
 # STEP 1 — Unique sequences:
 #   Remove duplicate sequences at each rank, keeping one representative per
 #   taxonomic group. Outputs one ID file per rank.
 #
 # STEP 2 — Nested prediction ID lists:
-#   For each (target x parent) combination, apply four sequential filters:
+#   For each (target x parent) combination, apply sequential filters:
 #     1. min_subgroups  — min resolved child taxa per parent chunk
-#     2. max_proportion — cap dominant child taxon to <= max_proportion
+#     2. max_proportion — cap dominant child taxon via species-weighted resampling
 #     3. min_sequences  — min sequences after capping
-#     4. max_sequences  — balanced round-robin downsample if too large
+#     4. max_sequences  — species-weighted downsample if too large
+#
+#   Downsampling selects whole species (weighted by sequence count) until
+#   max_sequences is reached. Species integrity is preserved — no species is
+#   split across the inclusion boundary. All sequences from a selected species
+#   are taken regardless of the rank being predicted.
 #
 # STEP 3 — Global prediction ID lists:
-#   Top-down recursive budget allocation across the full hierarchy, ensuring
-#   rare clades are represented proportionally at every taxonomic level.
+#   For each target rank, cap the dominant clade via species-weighted
+#   resampling, then species-weighted downsample to max_sequences.
 #
 # Usage:
 #   Rscript subset.R --fasta_in sequences.fasta \
@@ -68,7 +73,7 @@ option_list <- list(
               help = "Min sequences per chunk after proportion cap [default: %default]"),
   make_option("--max_sequences",
               type = "integer", default = 25000L, metavar = "INT",
-              help = "Max sequences per chunk; excess is balanced-downsampled [default: %default]"),
+              help = "Max sequences per chunk; excess is species-weighted downsampled [default: %default]"),
   make_option("--max_proportion",
               type = "double", default = 0.5, metavar = "NUM",
               help = "Max fraction of chunk that dominant child taxon may represent [default: %default]")
@@ -185,19 +190,37 @@ filter_unique_sequences <- function(classification_df, fasta_seqs, rank = "speci
   result
 }
 
-# balanced_downsample: round-robin downsample to n rows, balanced across taxa.
-balanced_downsample <- function(df, target_rank, n) {
-  df %>%
-    ungroup() %>%
-    group_by(!!sym(target_rank)) %>%
-    mutate(.draw_order = row_number()) %>%
-    ungroup() %>%
-    arrange(.draw_order, !!sym(target_rank)) %>%
-    slice_head(n = n) %>%
-    select(-.draw_order)
+# species_weighted_sample: select whole species, weighted by sequence count,
+# until n sequences are accumulated. No species is split across the inclusion
+# boundary. All sequences for a selected species are always taken together,
+# regardless of the rank being predicted.
+species_weighted_sample <- function(df, n) {
+  if (nrow(df) <= n) return(df)
+
+  species_counts <- df %>%
+    count(species, name = "n_seqs") %>%
+    arrange(desc(n_seqs))
+
+  selected_species <- character(0)
+  total_selected   <- 0L
+  remaining        <- species_counts
+
+  while (nrow(remaining) > 0 && total_selected < n) {
+    idx  <- sample(nrow(remaining), 1L, prob = remaining$n_seqs)
+    sp   <- remaining$species[[idx]]
+    sp_n <- remaining$n_seqs[[idx]]
+
+    if (total_selected + sp_n > n) break
+
+    selected_species <- c(selected_species, sp)
+    total_selected   <- total_selected + sp_n
+    remaining        <- remaining[-idx, , drop = FALSE]
+  }
+
+  df %>% filter(species %in% selected_species)
 }
 
-# nested_prediction_filter: apply four sequential filters per parent chunk.
+# nested_prediction_filter: apply sequential filters per parent chunk.
 nested_prediction_filter <- function(df, target_rank, parent_rank,
                                      max_proportion = 0.5, min_subgroups = 10,
                                      min_sequences = 30, max_sequences = 25000) {
@@ -214,33 +237,28 @@ nested_prediction_filter <- function(df, target_rank, parent_rank,
     # Filter 1: min unique child taxa
     if (length(unique(chunk[[target_rank]])) < min_subgroups) next
 
-    # Filter 2: cap dominant child taxon to max_proportion
-    rank_counts <- chunk %>%
+    # Filter 2: cap dominant child taxon via species-weighted resampling
+    child_counts   <- chunk %>%
       group_by(!!sym(target_rank)) %>%
       summarise(n = n(), .groups = "drop") %>%
       arrange(desc(n))
 
-    if (nrow(rank_counts) == 1) {
-      selected_ids <- chunk$id
-    } else {
-      largest_taxon    <- rank_counts[[1, target_rank]]
-      smaller_count    <- sum(rank_counts$n[-1])
-      max_from_largest <- floor((max_proportion / (1 - max_proportion)) * smaller_count)
-      non_dom_ids <- chunk %>% filter(!!sym(target_rank) != largest_taxon) %>% pull(id)
-      dom_ids     <- chunk %>% filter(!!sym(target_rank) == largest_taxon) %>% pull(id)
-      selected_ids <- if (length(dom_ids) <= max_from_largest) {
-        c(non_dom_ids, dom_ids)
-      } else {
-        c(non_dom_ids, sample(dom_ids, max_from_largest))
-      }
+    dominant_child <- child_counts[[1, target_rank]]
+    dominant_prop  <- child_counts[[1, "n"]] / nrow(chunk)
+
+    if (dominant_prop > max_proportion) {
+      non_dom     <- chunk %>% filter(!!sym(target_rank) != dominant_child)
+      dom         <- chunk %>% filter(!!sym(target_rank) == dominant_child)
+      max_dom     <- floor(nrow(non_dom) * max_proportion / (1 - max_proportion))
+      dom         <- species_weighted_sample(dom, max_dom)
+      chunk       <- bind_rows(non_dom, dom)
     }
-    chunk <- chunk %>% filter(id %in% selected_ids)
 
     # Filter 3: min sequences after capping
     if (nrow(chunk) < min_sequences) next
 
-    # Filter 4: balanced downsample if too large
-    if (nrow(chunk) > max_sequences) chunk <- balanced_downsample(chunk, target_rank, max_sequences)
+    # Filter 4: species-weighted downsample if too large
+    if (nrow(chunk) > max_sequences) chunk <- species_weighted_sample(chunk, max_sequences)
 
     chunk_results[[parent_taxon]] <- chunk
   }
@@ -249,85 +267,33 @@ nested_prediction_filter <- function(df, target_rank, parent_rank,
   bind_rows(chunk_results)
 }
 
-# allocate_budget: distribute budget across groups, redistributing from
-# underfull groups to groups that can absorb more.
-allocate_budget <- function(available, budget) {
-  n <- length(available)
-  if (n == 0 || budget == 0) return(setNames(integer(n), names(available)))
-  if (sum(available) <= budget) return(available)
-
-  allocation <- setNames(integer(n), names(available))
-  remaining  <- budget
-  competing  <- rep(TRUE, n)
-
-  while (remaining > 0 && any(competing)) {
-    n_competing <- sum(competing)
-    per_group   <- remaining / n_competing
-    underfull   <- competing & (available < per_group)
-
-    if (!any(underfull)) {
-      base_share              <- floor(remaining / n_competing)
-      allocation[competing]  <- base_share
-      leftover               <- remaining - base_share * n_competing
-      if (leftover > 0) {
-        top_up_idx              <- which(competing)[seq_len(leftover)]
-        allocation[top_up_idx] <- allocation[top_up_idx] + 1L
-      }
-      break
-    }
-    for (i in which(underfull)) {
-      allocation[i] <- available[i]
-      remaining     <- remaining - available[i]
-      competing[i]  <- FALSE
-    }
-  }
-  allocation
-}
-
-# hierarchical_sample: recursive budget descent through taxonomy.
-hierarchical_sample <- function(df, grouping_ranks, target_rank, budget) {
-  if (nrow(df) == 0 || budget == 0) return(NULL)
-  if (length(grouping_ranks) == 0) {
-    return(balanced_downsample(df, target_rank, min(budget, nrow(df))))
-  }
-
-  current_rank    <- grouping_ranks[1]
-  remaining_ranks <- grouping_ranks[-1]
-  df              <- df %>% filter(is_identified(!!sym(current_rank)))
-  if (nrow(df) == 0) return(NULL)
-
-  groups      <- split(df, df[[current_rank]])
-  available   <- sapply(groups, nrow)
-  allocations <- allocate_budget(available, budget)
-
-  results <- list()
-  for (grp in names(groups)) {
-    if (allocations[[grp]] == 0) next
-    res <- hierarchical_sample(groups[[grp]], remaining_ranks, target_rank, allocations[[grp]])
-    if (!is.null(res) && nrow(res) > 0) results[[grp]] <- res
-  }
-  if (length(results) == 0) return(NULL)
-  bind_rows(results)
-}
-
-# global_prediction_filter: top-down recursive budget allocation.
-global_prediction_filter <- function(df, target_rank, hierarchy = rank_hierarchy,
+# global_prediction_filter: cap the dominant target-rank clade via
+# species-weighted resampling, then downsample to max_sequences.
+global_prediction_filter <- function(df, target_rank, max_proportion = 0.5,
                                      max_sequences = 25000, min_sequences = 30) {
-  target_idx     <- which(hierarchy == target_rank)
-  grouping_ranks <- hierarchy[seq_len(target_idx - 1)]
-
   df <- df %>% filter(is_identified(!!sym(target_rank)))
   if (nrow(df) < min_sequences) return(NULL)
 
-  if (length(grouping_ranks) == 0) {
-    result <- balanced_downsample(df, target_rank, min(max_sequences, nrow(df)))
-    if (nrow(result) < min_sequences) return(NULL)
-    return(result)
+  clade_counts   <- df %>%
+    group_by(!!sym(target_rank)) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    arrange(desc(n))
+
+  dominant_clade <- clade_counts[[1, target_rank]]
+  dominant_prop  <- clade_counts[[1, "n"]] / nrow(df)
+
+  if (dominant_prop > max_proportion) {
+    non_dom <- df %>% filter(!!sym(target_rank) != dominant_clade)
+    dom     <- df %>% filter(!!sym(target_rank) == dominant_clade)
+    max_dom <- floor(nrow(non_dom) * max_proportion / (1 - max_proportion))
+    dom     <- species_weighted_sample(dom, max_dom)
+    df      <- bind_rows(non_dom, dom)
   }
 
-  result <- hierarchical_sample(df, grouping_ranks, target_rank, max_sequences)
-  if (is.null(result) || nrow(result) < min_sequences) return(NULL)
-  result
+  if (nrow(df) < min_sequences) return(NULL)
+  if (nrow(df) > max_sequences) df <- species_weighted_sample(df, max_sequences)
+  if (nrow(df) < min_sequences) return(NULL)
+  df
 }
 
 # ── Read inputs ───────────────────────────────────────────────────────────────
@@ -338,7 +304,22 @@ classification_df <- fread(classification_in) %>%
 
 cat("Reading FASTA file...\n")
 fasta_seqs <- readDNAStringSet(fasta_in)
-cat(sprintf("  Sequences loaded: %d\n\n", length(fasta_seqs)))
+cat(sprintf("  Sequences loaded: %d\n", length(fasta_seqs)))
+
+# ── Pre-filter: species-identified, min 3 sequences per species ───────────────
+
+cat("\nPre-filtering to species-identified sequences (>= 3 per species)...\n")
+n_before <- nrow(classification_df)
+
+classification_df <- classification_df %>%
+  filter(is_identified(species)) %>%
+  group_by(species) %>%
+  filter(n() >= 3) %>%
+  ungroup()
+
+cat(sprintf("  Retained %d / %d sequences (%d species)\n\n",
+            nrow(classification_df), n_before,
+            length(unique(classification_df$species))))
 
 # ── STEP 1: Unique sequences ──────────────────────────────────────────────────
 
@@ -391,7 +372,7 @@ for (target_rank in rank_hierarchy) {
   out_path <- file.path(output_dir, sprintf("%s_pred_id_global.txt", target_rank))
   result   <- global_prediction_filter(
     df = rank_dfs[[target_rank]], target_rank = target_rank,
-    hierarchy = rank_hierarchy, max_sequences = max_sequences, min_sequences = min_sequences
+    max_proportion = max_proportion, max_sequences = max_sequences, min_sequences = min_sequences
   )
   if (is.null(result)) {
     cat(sprintf("  %-10s ->  no sequences passed filters\n", target_rank)); next
