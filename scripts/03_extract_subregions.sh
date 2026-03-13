@@ -22,6 +22,8 @@ readonly GLOBAL_CLASS="./data/full_ITS/eukaryome_ITS.classification"
 readonly ITSX_TMP="./tmp/itsx"
 readonly PREFIX="eukaryome_ITS"
 
+readonly DEREP_LCA="./R/dereplicate_lca.R"
+
 readonly N_CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 
 # =============================================================================
@@ -54,6 +56,11 @@ if [[ ! -f "$GLOBAL_CLASS" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$DEREP_LCA" ]]; then
+    echo "ERROR: R script not found: $DEREP_LCA" >&2
+    exit 1
+fi
+
 # =============================================================================
 # RUN ITSx
 # =============================================================================
@@ -71,6 +78,7 @@ ITSx \
     -o  "$ITSX_TMP/$PREFIX" \
     --cpu "$N_CPUS" \
     --preserve T \
+    -E 1e-1 \
     -t all \
     --graphical F
 
@@ -116,21 +124,33 @@ filter_classification() {
 echo "=== PROCESSING ITS1 ==="
 
 ITS1_RAW="$ITSX_TMP/${PREFIX}.ITS1.fasta"
+ITS1_CLASS_TMP="$ITSX_TMP/eukaryome_ITS1.classification"
 ITS1_FASTA="./data/ITS1/eukaryome_ITS1.fasta"
 ITS1_CLASS="./data/ITS1/eukaryome_ITS1.classification"
 
 if [[ ! -f "$ITS1_RAW" ]]; then
     echo "WARNING: ITSx ITS1 output not found: $ITS1_RAW — skipping ITS1." >&2
 else
-    cp "$ITS1_RAW" "$ITS1_FASTA"
-    ITS1_COUNT=$(grep -c "^>" "$ITS1_FASTA")
-    echo "  ITS1 sequences: $ITS1_COUNT"
+    ITS1_COUNT=$(grep -c "^>" "$ITS1_RAW")
+    echo "  ITS1 sequences extracted: $ITS1_COUNT"
 
     echo "  Filtering classification for ITS1..."
-    filter_classification "$ITS1_FASTA" "$GLOBAL_CLASS" "$ITS1_CLASS"
+    filter_classification "$ITS1_RAW" "$GLOBAL_CLASS" "$ITS1_CLASS_TMP"
 
-    echo "  ITS1 FASTA written to          : $ITS1_FASTA"
-    echo "  ITS1 classification written to : $ITS1_CLASS"
+    echo "  Dereplicating ITS1..."
+    Rscript "$DEREP_LCA" \
+        --fasta_in           "$ITS1_RAW" \
+        --fasta_out          "$ITS1_FASTA" \
+        --classification_in  "$ITS1_CLASS_TMP" \
+        --classification_out "$ITS1_CLASS"
+
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: dereplicate_lca.R failed for ITS1." >&2
+        exit 1
+    fi
+
+    echo "  ITS1 dereplicated FASTA written to          : $ITS1_FASTA"
+    echo "  ITS1 dereplicated classification written to : $ITS1_CLASS"
 fi
 
 echo ""
@@ -142,21 +162,33 @@ echo ""
 echo "=== PROCESSING ITS2 ==="
 
 ITS2_RAW="$ITSX_TMP/${PREFIX}.ITS2.fasta"
+ITS2_CLASS_TMP="$ITSX_TMP/eukaryome_ITS2.classification"
 ITS2_FASTA="./data/ITS2/eukaryome_ITS2.fasta"
 ITS2_CLASS="./data/ITS2/eukaryome_ITS2.classification"
 
 if [[ ! -f "$ITS2_RAW" ]]; then
     echo "WARNING: ITSx ITS2 output not found: $ITS2_RAW — skipping ITS2." >&2
 else
-    cp "$ITS2_RAW" "$ITS2_FASTA"
-    ITS2_COUNT=$(grep -c "^>" "$ITS2_FASTA")
-    echo "  ITS2 sequences: $ITS2_COUNT"
+    ITS2_COUNT=$(grep -c "^>" "$ITS2_RAW")
+    echo "  ITS2 sequences extracted: $ITS2_COUNT"
 
     echo "  Filtering classification for ITS2..."
-    filter_classification "$ITS2_FASTA" "$GLOBAL_CLASS" "$ITS2_CLASS"
+    filter_classification "$ITS2_RAW" "$GLOBAL_CLASS" "$ITS2_CLASS_TMP"
 
-    echo "  ITS2 FASTA written to          : $ITS2_FASTA"
-    echo "  ITS2 classification written to : $ITS2_CLASS"
+    echo "  Dereplicating ITS2..."
+    Rscript "$DEREP_LCA" \
+        --fasta_in           "$ITS2_RAW" \
+        --fasta_out          "$ITS2_FASTA" \
+        --classification_in  "$ITS2_CLASS_TMP" \
+        --classification_out "$ITS2_CLASS"
+
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR: dereplicate_lca.R failed for ITS2." >&2
+        exit 1
+    fi
+
+    echo "  ITS2 dereplicated FASTA written to          : $ITS2_FASTA"
+    echo "  ITS2 dereplicated classification written to : $ITS2_CLASS"
 fi
 
 echo ""
@@ -167,9 +199,11 @@ echo ""
 
 echo "=== SEQUENCE COUNT SUMMARY ==="
 FULL_COUNT=$(grep -c "^>" "$GLOBAL_FASTA")
-echo "  Full ITS sequences : $FULL_COUNT"
-[[ -f "$ITS1_FASTA" ]] && echo "  ITS1 sequences     : $(grep -c '^>' "$ITS1_FASTA")"
-[[ -f "$ITS2_FASTA" ]] && echo "  ITS2 sequences     : $(grep -c '^>' "$ITS2_FASTA")"
+echo "  Full ITS sequences        : $FULL_COUNT"
+[[ -f "$ITS1_RAW"   ]] && echo "  ITS1 extracted sequences  : $(grep -c '^>' "$ITS1_RAW")"
+[[ -f "$ITS1_FASTA" ]] && echo "  ITS1 dereplicated         : $(grep -c '^>' "$ITS1_FASTA")"
+[[ -f "$ITS2_RAW"   ]] && echo "  ITS2 extracted sequences  : $(grep -c '^>' "$ITS2_RAW")"
+[[ -f "$ITS2_FASTA" ]] && echo "  ITS2 dereplicated         : $(grep -c '^>' "$ITS2_FASTA")"
 echo ""
 
 # =============================================================================

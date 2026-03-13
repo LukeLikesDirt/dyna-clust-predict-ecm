@@ -22,8 +22,8 @@ readonly DOWNLOAD_FILE="./tmp/General_EUK_ITS_v2.0.zip"
 readonly EXTRACTED_FASTA="./tmp/General_EUK_ITS_v2.0.fasta"
 
 # Output files
-readonly OUT_FASTA="./data/full_ITS/eukaryome_ITS.fasta"
-readonly OUT_CLASS="./data/full_ITS/eukaryome_ITS.classification"
+readonly OUT_FASTA="./tmp/eukaryome_ITS.fasta"
+readonly OUT_CLASS="./tmp/eukaryome_ITS.classification"
 
 # Helper R script
 readonly REFORMAT="./R/reformat.R"
