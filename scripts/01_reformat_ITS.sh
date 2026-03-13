@@ -2,9 +2,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=1-00:00:00
-#SBATCH --partition=day
-#SBATCH --output=slurm/%x.%j.out
+#SBATCH --time=0-01:00:00
+#SBATCH --partition=short
+#SBATCH --output=logs/%x.%j.out
 
 # Script name:  01_reformat_ITS.sh
 # Description:  Download the EUKARYOME ITS v2.0 database, reformat sequence

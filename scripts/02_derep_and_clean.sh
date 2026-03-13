@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
 #SBATCH --time=0-01:00:00
-#SBATCH --partition=day
-#SBATCH --output=slurm/%x.%j.out
+#SBATCH --partition=short
+#SBATCH --output=logs/%x.%j.out
 
 # Script name:  02_derep_and_clean.sh
 # Description:  Filter, clean, and dereplicate the ITS reference dataset.

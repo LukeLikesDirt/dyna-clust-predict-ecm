@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=80
+#SBATCH --cpus-per-task=64
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=week
-#SBATCH --output=slurm/%x.%j.out
+#SBATCH --output=logs/%x.%j.out
 
 # Script name:  03_extract_subregions.sh
 # Description:  Extract ITS1 and ITS2 subregions from the full ITS FASTA using
@@ -19,7 +19,6 @@
 readonly GLOBAL_FASTA="./data/full_ITS/eukaryome_ITS.fasta"
 readonly GLOBAL_CLASS="./data/full_ITS/eukaryome_ITS.classification"
 
-readonly ITSX_TMP="./tmp/itsx"
 readonly PREFIX="eukaryome_ITS"
 
 readonly DEREP_LCA="./R/dereplicate_lca.R"
@@ -30,7 +29,7 @@ readonly N_CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 # DIRECTORY SETUP
 # =============================================================================
 
-mkdir -p ./data/ITS1 ./data/ITS2 "$ITSX_TMP"
+mkdir -p ./data/ITS1 ./data/ITS2 .tmp/
 
 # =============================================================================
 # ENVIRONMENT SETUP
@@ -69,13 +68,13 @@ echo ""
 echo "=== RUNNING ITSx ==="
 echo "$(date)"
 echo "Input FASTA : $GLOBAL_FASTA"
-echo "Output dir  : $ITSX_TMP"
+echo "Output dir  : ./tmp/"
 echo "Threads     : $N_CPUS"
 echo ""
 
 ITSx \
     -i  "$GLOBAL_FASTA" \
-    -o  "$ITSX_TMP/$PREFIX" \
+    -o  "./tmp/$PREFIX" \
     --cpu "$N_CPUS" \
     --preserve T \
     -E 1e-1 \
@@ -123,8 +122,8 @@ filter_classification() {
 
 echo "=== PROCESSING ITS1 ==="
 
-ITS1_RAW="$ITSX_TMP/${PREFIX}.ITS1.fasta"
-ITS1_CLASS_TMP="$ITSX_TMP/eukaryome_ITS1.classification"
+ITS1_RAW="./tmp/${PREFIX}.ITS1.fasta"
+ITS1_CLASS_TMP="./tmp/eukaryome_ITS1.classification"
 ITS1_FASTA="./data/ITS1/eukaryome_ITS1.fasta"
 ITS1_CLASS="./data/ITS1/eukaryome_ITS1.classification"
 
@@ -161,8 +160,8 @@ echo ""
 
 echo "=== PROCESSING ITS2 ==="
 
-ITS2_RAW="$ITSX_TMP/${PREFIX}.ITS2.fasta"
-ITS2_CLASS_TMP="$ITSX_TMP/eukaryome_ITS2.classification"
+ITS2_RAW="./tmp/${PREFIX}.ITS2.fasta"
+ITS2_CLASS_TMP="./tmp/eukaryome_ITS2.classification"
 ITS2_FASTA="./data/ITS2/eukaryome_ITS2.fasta"
 ITS2_CLASS="./data/ITS2/eukaryome_ITS2.classification"
 
@@ -211,8 +210,8 @@ echo ""
 # =============================================================================
 
 echo "=== CLEANUP ==="
-echo "Removing ITSx tmp directory: $ITSX_TMP"
-rm -rf "$ITSX_TMP"
+echo "Removing ITSx tmp directory: .tmp/"
+rm -rf .tmp/
 
 echo ""
 echo "=== PIPELINE COMPLETED SUCCESSFULLY ==="
