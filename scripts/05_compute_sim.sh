@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=80
 #SBATCH --time=60-00:00:00
 #SBATCH --partition=long
-#SBATCH --output=slurm/%x.%j.out
+#SBATCH --output=logs/%x.%j.out
 
 # Script name:  05_compute_sim.sh
 # Description:  Optional pre-computation of pairwise vsearch similarity matrices
