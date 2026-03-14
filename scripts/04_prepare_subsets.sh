@@ -46,45 +46,36 @@ fi
 # HELPER FUNCTION
 # =============================================================================
 
-# run_subset <fasta_in> <classification_in> <output_dir> <region_label>
+# run_subset <classification_in> <output_dir> <region_label>
 run_subset() {
-    local fasta_in="$1"
-    local classification_in="$2"
-    local output_dir="$3"
-    local label="$4"
+  local classification_in="$1"
+  local output_dir="$2"
+  local label="$3"
 
-    if [[ ! -f "$fasta_in" ]]; then
-        echo "WARNING: FASTA not found for region '$label', skipping: $fasta_in" >&2
-        return 0
-    fi
+  if [[ ! -f "$classification_in" ]]; then
+    echo "WARNING: Classification not found for region '$label', skipping: $classification_in" >&2
+    return 0
+  fi
 
-    if [[ ! -f "$classification_in" ]]; then
-        echo "WARNING: Classification not found for region '$label', skipping: $classification_in" >&2
-        return 0
-    fi
+  echo ""
+  echo "--- Region: $label ---"
+  echo "Classification : $classification_in"
+  echo "Output dir     : $output_dir"
+  echo "$(date)"
 
-    echo ""
-    echo "--- Region: $label ---"
-    echo "FASTA          : $fasta_in"
-    echo "Classification : $classification_in"
-    echo "Output dir     : $output_dir"
-    echo "$(date)"
+  Rscript "$SUBSET" \
+    --classification_in "$classification_in" \
+    --output_dir        "$output_dir" \
+    --min_subgroups     "$MIN_SUBGROUPS" \
+    --min_sequences     "$MIN_SEQUENCES" \
+    --max_sequences     "$MAX_SEQUENCES" \
+    --max_proportion    "$MAX_PROPORTION"
 
-    Rscript "$SUBSET" \
-        --fasta_in          "$fasta_in" \
-        --classification_in "$classification_in" \
-        --output_dir        "$output_dir" \
-        --min_subgroups     "$MIN_SUBGROUPS" \
-        --min_sequences     "$MIN_SEQUENCES" \
-        --max_sequences     "$MAX_SEQUENCES" \
-        --max_proportion    "$MAX_PROPORTION"
-
-    if [[ $? -ne 0 ]]; then
-        echo "ERROR: subset.R failed for region '$label'." >&2
-        return 1
-    fi
-
-    echo "Finished region '$label' at: $(date)"
+  if [[ $? -ne 0 ]]; then
+    echo "ERROR: subset.R failed for region '$label'." >&2
+    return 1
+  fi
+  echo "Finished region '$label' at: $(date)"
 }
 
 # =============================================================================
@@ -100,21 +91,18 @@ echo "max_proportion : $MAX_PROPORTION"
 
 # 1. Full ITS
 run_subset \
-    "./data/full_ITS/eukaryome_ITS.fasta" \
     "./data/full_ITS/eukaryome_ITS.classification" \
     "./data/full_ITS" \
     "full_ITS"
 
 # 2. ITS1
 run_subset \
-    "./data/ITS1/eukaryome_ITS1.fasta" \
     "./data/ITS1/eukaryome_ITS1.classification" \
     "./data/ITS1" \
     "ITS1"
 
 # 3. ITS2
 run_subset \
-    "./data/ITS2/eukaryome_ITS2.fasta" \
     "./data/ITS2/eukaryome_ITS2.classification" \
     "./data/ITS2" \
     "ITS2"
