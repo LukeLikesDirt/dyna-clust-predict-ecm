@@ -98,7 +98,7 @@ option_list <- list(
               type = "integer", default = 30L, metavar = "INT",
               help = "Min sequences required to report a cutoff [default: %default]"),
   make_option("--max_seq_no",
-              type = "integer", default = 25000L, metavar = "INT",
+              type = "integer", default = 20000L, metavar = "INT",
               help = "Max sequences per dataset; excess is randomly sampled [default: %default]"),
   make_option("--max_proportion",
               type = "double", default = 1.0, metavar = "NUM",

@@ -2,9 +2,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=0-02:00:00
-#SBATCH --partition=day
-#SBATCH --output=slurm/%x.%j.out
+#SBATCH --time=0-01:00:00
+#SBATCH --partition=short
+#SBATCH --output=logs/%x.%j.out
 
 # Script name:  04_prepare_subsets.sh
 # Description:  Prepare prediction ID files for all three ITS regions (full ITS,
@@ -22,8 +22,8 @@ readonly SUBSET="./R/subset.R"
 # Filter constants
 readonly MIN_SUBGROUPS=10
 readonly MIN_SEQUENCES=30
-readonly MAX_SEQUENCES=25000
-readonly MAX_PROPORTION=0.5
+readonly MAX_SEQUENCES=20000
+readonly MAX_PROPORTION=0.75
 
 # =============================================================================
 # ENVIRONMENT SETUP

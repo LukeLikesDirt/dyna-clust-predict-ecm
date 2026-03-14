@@ -6,7 +6,7 @@
 #SBATCH --time=60-00:00:00
 #SBATCH --partition=long
 #SBATCH --nodelist=ltu-hpc-2
-#SBATCH --output=slurm/%x.%j.out
+#SBATCH --output=logs/%x.%j.out
 
 # Script name:  06b_predict_cutoffs_region.sh
 # Description:  Predict similarity cutoffs for a SINGLE ITS region.
