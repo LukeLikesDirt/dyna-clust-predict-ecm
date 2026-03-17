@@ -13,6 +13,7 @@
 # Note: This script must be run from the project root directory.
 
 suppressPackageStartupMessages(library(optparse))
+suppressPackageStartupMessages(library(data.table))
 
 # ── Arguments ─────────────────────────────────────────────────────────────────
 
@@ -79,22 +80,22 @@ compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir) {
   }
 
   cat("[sim] Parsing vsearch output...\n")
-  b <- read.table(vsearch_out, sep = "\t", header = FALSE, stringsAsFactors = FALSE,
-                  col.names = c("qid", "sid", "pident"))
-  b$score <- round(b$pident / 100, 4)
+  b <- fread(vsearch_out, sep = "\t", header = FALSE,
+             col.names = c("qid", "sid", "pident"), nThread = n_cpus)
+  b[, score := round(pident / 100, 4)]
+  b[, pident := NULL]
 
   all_ids <- unique(c(b$qid, b$sid))
-  sim_df  <- rbind(
-    data.frame(i = b$qid,   j = b$sid,   score = b$score, stringsAsFactors = FALSE),
-    data.frame(i = b$sid,   j = b$qid,   score = b$score, stringsAsFactors = FALSE),
-    data.frame(i = all_ids, j = all_ids, score = 1.0,      stringsAsFactors = FALSE)
-  )
-  sim_df <- sim_df[order(-sim_df$score), ]
-  sim_df <- sim_df[!duplicated(paste(sim_df$i, sim_df$j)), ]
-  rownames(sim_df) <- NULL
+  sim_dt  <- rbindlist(list(
+    b[, .(i = qid, j = sid, score)],
+    b[, .(i = sid, j = qid, score)],
+    data.table(i = all_ids, j = all_ids, score = 1.0)
+  ))
+  setorder(sim_dt, -score)
+  sim_dt <- unique(sim_dt, by = c("i", "j"))
 
   unlink(vsearch_out)
-  sim_df
+  sim_dt
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -107,9 +108,8 @@ sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir)
 out_file <- file.path(output_dir, paste0(strip_ext(fasta_file), ".sim"))
 
 cat("[sim] Saving similarity matrix to:", out_file, "\n")
-out_df <- sim_df[sim_df$score >= min_sim, ]
-write.table(out_df, out_file, sep = " ", quote = FALSE,
-            row.names = FALSE, col.names = FALSE)
+out_dt <- sim_df[score >= min_sim]
+fwrite(out_dt, out_file, sep = " ", quote = FALSE, col.names = FALSE, nThread = n_cpus)
 
 cat(sprintf("[sim] Done. %d entries saved (%.0f unique sequences).\n",
-            nrow(out_df), length(unique(c(out_df$i, out_df$j)))))
+            nrow(out_dt), length(unique(c(out_dt$i, out_dt$j)))))
