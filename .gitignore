@@ -30,3 +30,4 @@ slurm/
 *.zip
 *.gz
 *.tar
+.positai
