@@ -1,14 +1,8 @@
 # dyna-clust-predict-ecm
 
-`dyna-clust-predict-ecm` is a **special-use adaptation** of
+`dyna-clust-predict-ecm` is a **special-use adaptation** of  `dyna-clust-predict` for predicting similarity cut-offs in **ectomycorrhizal (ECM) fungi** using the **full-ITS, ITS or ITS2** fragments.
 
-`dyna-clust-predict` for predicting similarity cut-offs in
-**ectomycorrhizal (ECM) fungi** using the
-**full-ITS, ITS or ITS2** fragments.
-
-It predicts optimal sequence similarity cut-offs for classification and
-clustering using **vsearch global alignment** and
-**F-measure optimisation**, following Vu *et al.* (2022).
+It predicts optimal sequence similarity cut-offs for classification and clustering using **vsearch global alignment** and **F-measure optimisation**, following Vu *et al.* (2022).
 
 ## Overview
 
