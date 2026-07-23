@@ -50,8 +50,12 @@ suppressPackageStartupMessages({
   library(future)
 })
 
-# Allow large globals to be exported to workers (sim_dt can be several hundred MB).
-options(future.globals.maxSize = 2000 * 1024^2)
+# Allow large globals to be exported to workers. sim_dt scales with dataset
+# size (observed ~5.5 GiB for a ~14k-sequence kingdom-level Fungi matrix in the
+# sibling dyna-clust-predict-am project), so the previous 2000 MiB cap forced
+# silent fallback to sequential processing. ECM's full-ITS datasets are larger
+# still, so this matters even more here.
+options(future.globals.maxSize = 8 * 1024^3)
 
 # ── Shared utilities ──────────────────────────────────────────────────────────
 source("R/utils.R")
