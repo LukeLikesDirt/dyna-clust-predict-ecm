@@ -49,6 +49,18 @@ The workflow is conceptually adapted from
 
 All scripts must be run from the **project root directory**.
 
+### Alphanumeric taxon codes
+
+Tedersoo *et al.* (2024, *MycoKeys* 107: 273–325) propose an alphanumeric
+coding system (e.g. `Agaricales.fam01`, `Boletaceae.gen05`) to communicate
+undescribed family- and genus-level groups ahead of formal description. Since
+the paper's authors also curate EUKARYOME, these codes appear directly in
+EUKARYOME's placeholder taxonomy fields. `R/reformat.R` preserves these
+codes (converting `.` to `_`, e.g. `Agaricales_fam01`) rather than collapsing
+them to "unidentified", so they are retained as usable taxonomic groups
+throughout the pipeline. Genuine unplaced/incertae sedis placeholders (e.g.
+`Acari.fam.incertae.sedis`, `.reg` codes) are still treated as unidentified.
+
 ### R modules
 
   `R/utils.R`             Shared utility functions (e.g., `is_identified()`)

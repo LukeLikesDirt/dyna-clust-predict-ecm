@@ -106,18 +106,24 @@ classification_df <- fasta_df %>%
   # Replace "unclassified" with "unidentified"
   mutate(across(c(kingdom, phylum, class, order, family, genus, species_epithet),
                 ~ ifelse(.x == "unclassified", "unidentified", .x))) %>%
-  # Remove tentative IDs (cf., nr., aff., nov.inval.) and EUKARYOME predictions
+  # Remove tentative IDs (cf., nr., aff., nov.inval.), EUKARYOME predictions,
+  # and genuine unplaced/incertae sedis placeholders
   mutate(
     across(
       c(kingdom, phylum, class, order, family, genus, species_epithet),
-      ~ ifelse(str_detect(.x, "cf\\.|nr\\.|aff\\.|nov\\.inval\\.|\\.reg"),
+      ~ ifelse(str_detect(.x, "cf\\.|nr\\.|aff\\.|nov\\.inval\\.|\\.reg|incertae[ ._-]sedis"),
                "unidentified", .x)
     ),
-    phylum = ifelse(grepl("\\.phy", phylum), "unidentified", phylum),
-    class  = ifelse(grepl("\\.cl",  class),  "unidentified", class),
-    order  = ifelse(grepl("\\.ord", order),  "unidentified", order),
-    family = ifelse(grepl("\\.fam", family), "unidentified", family),
-    genus  = ifelse(grepl("\\.gen", genus),  "unidentified", genus)
+    # Preserve Tedersoo et al. (2024) numbered alphanumeric placeholder codes
+    # (e.g. Agaricales.fam01, Boletaceae.gen05) as usable taxonomic groups,
+    # converting "." to "_" so labels survive downstream parsing. Only numbered
+    # codes are preserved; unnumbered incertae sedis bins were already sent to
+    # "unidentified" above.
+    phylum = ifelse(grepl("\\.phy[0-9]", phylum), str_replace_all(phylum, "\\.", "_"), phylum),
+    class  = ifelse(grepl("\\.cl[0-9]",  class),  str_replace_all(class,  "\\.", "_"), class),
+    order  = ifelse(grepl("\\.ord[0-9]", order),  str_replace_all(order,  "\\.", "_"), order),
+    family = ifelse(grepl("\\.fam[0-9]", family), str_replace_all(family, "\\.", "_"), family),
+    genus  = ifelse(grepl("\\.gen[0-9]", genus),  str_replace_all(genus,  "\\.", "_"), genus)
   ) %>%
   # Construct species names
   mutate(
