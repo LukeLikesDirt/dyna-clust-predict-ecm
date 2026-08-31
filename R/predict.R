@@ -52,9 +52,8 @@ suppressPackageStartupMessages({
 
 # Allow large globals to be exported to workers. sim_dt scales with dataset
 # size (observed ~5.5 GiB for a ~14k-sequence kingdom-level Fungi matrix in the
-# sibling dyna-clust-predict-am project), so the previous 2000 MiB cap forced
-# silent fallback to sequential processing. ECM's full-ITS datasets are larger
-# still, so this matters even more here.
+# sibling dyna-clust-predict-am project), so a too-small cap forces a silent
+# fallback to sequential processing.
 options(future.globals.maxSize = 8 * 1024^3)
 
 # ── Shared utilities ──────────────────────────────────────────────────────────
@@ -313,7 +312,10 @@ write_subset_fasta <- function(fasta_file, ids, out_path) {
 
 load_classification <- function(class_file, ranks, higher_ranks, id_col = "id") {
   cat("[predict] Loading classification from:", class_file, "\n")
-  cls <- fread(class_file, sep = "\t", header = TRUE, quote = "",
+  # Default quoting (not quote = "") so data.table::fwrite()'s empty-string
+  # marker -- a literal "" written to disambiguate an empty string from NA --
+  # round-trips correctly back to "" instead of being read as literal text.
+  cls <- fread(class_file, sep = "\t", header = TRUE,
                fill = TRUE, na.strings = "", check.names = FALSE,
                data.table = FALSE)
   required <- unique(c(id_col, ranks, higher_ranks))

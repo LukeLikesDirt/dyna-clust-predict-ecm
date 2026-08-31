@@ -61,7 +61,12 @@ option_list <- list(
               help = "Max sequences per chunk; excess is randomly downsampled [default: %default]"),
   make_option("--max_proportion",
               type = "double", default = 1, metavar = "NUM",
-              help = "Max fraction of chunk that dominant child taxon may represent [default: %default]")
+              help = "Max fraction of chunk that dominant child taxon may represent [default: %default]"),
+  make_option("--max_kingdom_proportion",
+              type = "double", default = 0.5, metavar = "NUM",
+              help = paste("Max fraction of the STEP 2 global pool that the dominant kingdom",
+                           "may represent (independent of --max_proportion, which caps the",
+                           "target rank's own dominant clade) [default: %default]"))
 )
 
 opt <- parse_args(
@@ -81,6 +86,7 @@ min_subgroups     <- opt$min_subgroups
 min_sequences     <- opt$min_sequences
 max_sequences     <- opt$max_sequences
 max_proportion    <- opt$max_proportion
+max_kingdom_proportion <- opt$max_kingdom_proportion
 
 if (!file.exists(classification_in)) stop("Classification file not found: ", classification_in)
 if (!is.numeric(min_subgroups) || min_subgroups <= 0)
@@ -91,6 +97,8 @@ if (!is.numeric(max_sequences) || max_sequences <= 0)
   stop("max_sequences must be a positive integer")
 if (is.na(max_proportion) || max_proportion <= 0 || max_proportion >= 1)
   stop("max_proportion must be strictly between 0 and 1")
+if (is.na(max_kingdom_proportion) || max_kingdom_proportion <= 0 || max_kingdom_proportion > 1)
+  stop("max_kingdom_proportion must be in (0, 1]")
 
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
@@ -101,26 +109,12 @@ cat(sprintf("  min_subgroups     : %d\n", min_subgroups))
 cat(sprintf("  min_sequences     : %d\n", min_sequences))
 cat(sprintf("  max_sequences     : %d\n", max_sequences))
 cat(sprintf("  max_proportion    : %.2f\n", max_proportion))
+cat(sprintf("  max_kingdom_proportion : %.2f\n", max_kingdom_proportion))
 cat("\n")
 
-# ── Rank metadata ─────────────────────────────────────────────────────────────
-
-rank_hierarchy <- c("kingdom", "phylum", "class", "order", "family", "genus", "species")
-
-rank_abbr <- c(
-  kingdom = "kng", phylum = "phy", class = "cls", order = "ord",
-  family  = "fam", genus  = "gen", species = "spe"
-)
-
-parent_ranks_map <- list(
-  species = c("genus", "family", "order", "class", "phylum", "kingdom"),
-  genus   = c("family", "order", "class", "phylum", "kingdom"),
-  family  = c("order", "class", "phylum", "kingdom"),
-  order   = c("class", "phylum", "kingdom"),
-  class   = c("phylum", "kingdom"),
-  phylum  = c("kingdom"),
-  kingdom = character(0)
-)
+# Rank metadata (rank_hierarchy, rank_abbr, parent_ranks_map) now lives in
+# R/utils.R, sourced above, so subset.R and consolidate_cutoffs.R share one
+# definition.
 
 # ── Functions ─────────────────────────────────────────────────────────────────
 
@@ -171,30 +165,51 @@ nested_prediction_filter <- function(df, target_rank, parent_rank,
   bind_rows(chunk_results)
 }
 
-# global_prediction_filter: cap the dominant target-rank clade via random
-# subsampling, then randomly downsample to max_sequences.
-global_prediction_filter <- function(df, target_rank, max_proportion = 1,
-                                     max_sequences = 20000, min_sequences = 30) {
-  df <- df %>% filter(is_identified(!!sym(target_rank)))
-  if (nrow(df) < min_sequences) return(NULL)
+# cap_dominant_group: subsample the dominant value of `group_col` down to
+# max_proportion of the resulting data, keeping all non-dominant rows whole.
+# Returns df unchanged if already within bounds or if capping is disabled
+# (max_proportion >= 1).
+cap_dominant_group <- function(df, group_col, max_proportion) {
+  if (nrow(df) == 0 || max_proportion >= 1) return(df)
 
-  clade_counts   <- df %>%
-    group_by(!!sym(target_rank)) %>%
+  group_counts <- df %>%
+    group_by(!!sym(group_col)) %>%
     summarise(n = n(), .groups = "drop") %>%
     arrange(desc(n))
 
-  dominant_clade <- clade_counts[[1, target_rank]]
-  dominant_prop  <- clade_counts[[1, "n"]] / nrow(df)
+  dominant_group <- group_counts[[1, group_col]]
+  dominant_prop  <- group_counts[[1, "n"]] / nrow(df)
 
-  if (dominant_prop > max_proportion) {
-    non_dom <- df %>% filter(!!sym(target_rank) != dominant_clade)
-    dom     <- df %>% filter(!!sym(target_rank) == dominant_clade)
-    max_dom <- floor(nrow(non_dom) * max_proportion / (1 - max_proportion))
-    dom     <- slice_sample(dom, n = max_dom)
-    df      <- bind_rows(non_dom, dom)
+  if (dominant_prop <= max_proportion) return(df)
+
+  non_dom <- df %>% filter(!!sym(group_col) != dominant_group)
+  dom     <- df %>% filter(!!sym(group_col) == dominant_group)
+  max_dom <- floor(nrow(non_dom) * max_proportion / (1 - max_proportion))
+  dom     <- slice_sample(dom, n = max_dom)
+  bind_rows(non_dom, dom)
+}
+
+# global_prediction_filter: cap the dominant kingdom's share of the pool
+# (kingdom composition, e.g. Fungi ~66% / Viridiplantae ~27% of the raw
+# species-identified pool, otherwise swamps the global pool regardless of how
+# the target rank's own clades are distributed -- the target-rank cap below
+# is inert against that skew since no single target-rank clade dominates),
+# then cap the dominant target-rank clade, then randomly downsample to
+# max_sequences.
+global_prediction_filter <- function(df, target_rank, max_proportion = 1,
+                                     max_sequences = 20000, min_sequences = 30,
+                                     max_kingdom_proportion = 1) {
+  df <- df %>% filter(is_identified(!!sym(target_rank)))
+  if (nrow(df) < min_sequences) return(NULL)
+
+  if (target_rank != "kingdom") {
+    df <- cap_dominant_group(df, "kingdom", max_kingdom_proportion)
+    if (nrow(df) < min_sequences) return(NULL)
   }
 
+  df <- cap_dominant_group(df, target_rank, max_proportion)
   if (nrow(df) < min_sequences) return(NULL)
+
   if (nrow(df) > max_sequences) df <- slice_sample(df, n = max_sequences)
   if (nrow(df) < min_sequences) return(NULL)
   df
@@ -254,17 +269,19 @@ for (target_rank in rank_hierarchy) {
   out_path <- file.path(output_dir, sprintf("%s_pred_id_global.txt", target_rank))
   result   <- global_prediction_filter(
     df = classification_df, target_rank = target_rank,
-    max_proportion = max_proportion, max_sequences = max_sequences, min_sequences = min_sequences
+    max_proportion = max_proportion, max_sequences = max_sequences, min_sequences = min_sequences,
+    max_kingdom_proportion = max_kingdom_proportion
   )
   if (is.null(result)) {
     cat(sprintf("  %-10s ->  no sequences passed filters\n", target_rank)); next
   }
   writeLines(result$id, out_path)
   dom_pct <- max(table(result[[target_rank]])) / nrow(result) * 100
+  dom_kng_pct <- max(table(result$kingdom)) / nrow(result) * 100
   cat(sprintf(
-    "  %-10s ->  %6d IDs  |  %d unique %-10s  |  dominant: %.1f%%  ->  %s\n",
+    "  %-10s ->  %6d IDs  |  %d unique %-10s  |  dominant %s: %.1f%%  |  dominant kingdom: %.1f%%  ->  %s\n",
     target_rank, nrow(result), length(unique(result[[target_rank]])),
-    target_rank, dom_pct, out_path
+    target_rank, target_rank, dom_pct, dom_kng_pct, out_path
   ))
 }
 

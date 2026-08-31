@@ -26,6 +26,8 @@ suppressPackageStartupMessages({
 
 options(future.globals.maxSize = 2000 * 1024^2)
 
+source("R/utils.R")
+
 # ── Arguments ─────────────────────────────────────────────────────────────────
 
 option_list <- list(
@@ -37,7 +39,12 @@ option_list <- list(
               help = "Output reformatted FASTA file [required]"),
   make_option("--classification_out",
               type = "character", metavar = "FILE",
-              help = "Output tab-delimited classification file [required]")
+              help = "Output tab-delimited classification file [required]"),
+  make_option("--manifest_out",
+              type = "character", default = "data/homonym_manifest.txt",
+              metavar = "FILE",
+              help = paste("Output path for the cross-kingdom genus homonym manifest",
+                           "[default: %default]"))
 )
 
 opt <- parse_args(
@@ -59,8 +66,9 @@ if (!file.exists(opt$fasta_in))      stop("Input FASTA not found: ", opt$fasta_i
 fasta_in           <- opt$fasta_in
 fasta_out          <- opt$fasta_out
 classification_out <- opt$classification_out
+manifest_out       <- opt$manifest_out
 
-for (d in unique(dirname(c(fasta_out, classification_out)))) {
+for (d in unique(dirname(c(fasta_out, classification_out, manifest_out)))) {
   if (!dir.exists(d) && d != ".") dir.create(d, recursive = TRUE)
 }
 
@@ -106,24 +114,69 @@ classification_df <- fasta_df %>%
   # Replace "unclassified" with "unidentified"
   mutate(across(c(kingdom, phylum, class, order, family, genus, species_epithet),
                 ~ ifelse(.x == "unclassified", "unidentified", .x))) %>%
-  # Remove tentative IDs (cf., nr., aff., nov.inval.), EUKARYOME predictions,
-  # and genuine unplaced/incertae sedis placeholders
+  # Remove tentative IDs (cf., nr., aff., nov.inval.) and EUKARYOME predictions.
+  # Numbered Tedersoo et al. (2024, MycoKeys 107) placeholder codes (e.g.
+  # Densosporales.fam02, Glomeraceae.gen05) are preserved as usable taxonomic
+  # groups rather than discarded -- "." is converted to "_" so the labels
+  # survive downstream taxonomy-string parsing (e.g. FASTA headers, sim-matrix
+  # IDs). Unnumbered incertae sedis bins are still sent to "unidentified" by
+  # is_identified() downstream, so no separate handling is needed here.
   mutate(
     across(
       c(kingdom, phylum, class, order, family, genus, species_epithet),
-      ~ ifelse(str_detect(.x, "cf\\.|nr\\.|aff\\.|nov\\.inval\\.|\\.reg|incertae[ ._-]sedis"),
+      ~ ifelse(str_detect(.x, "cf\\.|nr\\.|aff\\.|nov\\.inval\\.|\\.reg"),
                "unidentified", .x)
     ),
-    # Preserve Tedersoo et al. (2024) numbered alphanumeric placeholder codes
-    # (e.g. Agaricales.fam01, Boletaceae.gen05) as usable taxonomic groups,
-    # converting "." to "_" so labels survive downstream parsing. Only numbered
-    # codes are preserved; unnumbered incertae sedis bins were already sent to
-    # "unidentified" above.
-    phylum = ifelse(grepl("\\.phy[0-9]", phylum), str_replace_all(phylum, "\\.", "_"), phylum),
-    class  = ifelse(grepl("\\.cl[0-9]",  class),  str_replace_all(class,  "\\.", "_"), class),
-    order  = ifelse(grepl("\\.ord[0-9]", order),  str_replace_all(order,  "\\.", "_"), order),
-    family = ifelse(grepl("\\.fam[0-9]", family), str_replace_all(family, "\\.", "_"), family),
-    genus  = ifelse(grepl("\\.gen[0-9]", genus),  str_replace_all(genus,  "\\.", "_"), genus)
+    phylum = ifelse(grepl("\\.phy", phylum), str_replace_all(phylum, "\\.", "_"), phylum),
+    class  = ifelse(grepl("\\.cl",  class),  str_replace_all(class,  "\\.", "_"), class),
+    order  = ifelse(grepl("\\.ord", order),  str_replace_all(order,  "\\.", "_"), order),
+    family = ifelse(grepl("\\.fam", family), str_replace_all(family, "\\.", "_"), family),
+    genus  = ifelse(grepl("\\.gen", genus),  str_replace_all(genus,  "\\.", "_"), genus)
+  ) %>%
+  # Strip parentheses/brackets from genus names that are fully wrapped, e.g.
+  # (Aleuria) -> Aleuria, (Candida] -> Candida (tolerates a mismatched
+  # closing bracket). Anchored at both ends, so a disambiguation SUFFIX like
+  # Galeropsis(Fungi) -- which has text before the "(" -- is left unchanged.
+  mutate(
+    genus = str_replace(genus, "^[(\\[]([^)\\]]+)[)\\]]$", "\\1")
+  )
+
+# ── Cross-kingdom genus homonym disambiguation ────────────────────────────────
+# EUKARYOME already disambiguates some known cross-kingdom genus homonyms by
+# appending "(Kingdom)" to the genus name (e.g. Acanthella(Metazoa) vs
+# Acanthella(Viridiplantae)) -- this detects any collision EUKARYOME hasn't
+# already caught and applies the identical convention, so pipeline-generated
+# and upstream-supplied disambiguation are indistinguishable downstream.
+# Must run before species construction so the species binomial inherits the
+# disambiguated genus automatically.
+#
+# A genus only counts toward a collision if it spans >1 IDENTIFIED kingdom
+# (is_identified(), from R/utils.R) -- otherwise EUKARYOME's own artifact
+# markers (_pseudogene etc.) would manufacture false homonyms -- and only
+# genus values not already ending in ")" are eligible, so an
+# already-disambiguated upstream name is never re-wrapped.
+
+homonym_genera <- classification_df %>%
+  filter(is_identified(genus), is_identified(kingdom), !str_detect(genus, "\\)$")) %>%
+  distinct(genus, kingdom) %>%
+  count(genus, name = "n_kingdoms") %>%
+  filter(n_kingdoms > 1) %>%
+  pull(genus)
+
+homonym_manifest <- classification_df %>%
+  filter(genus %in% homonym_genera, is_identified(kingdom)) %>%
+  count(genus, kingdom, name = "n_sequences") %>%
+  arrange(genus, kingdom) %>%
+  mutate(disambiguated_genus = paste0(genus, "(", kingdom, ")")) %>%
+  rename(original_genus = genus)
+
+cat(sprintf("\nCross-kingdom genus homonyms found: %d (%d sequences)\n",
+            length(homonym_genera), sum(homonym_manifest$n_sequences)))
+
+classification_df <- classification_df %>%
+  mutate(
+    genus = ifelse(genus %in% homonym_genera & is_identified(kingdom),
+                   paste0(genus, "(", kingdom, ")"), genus)
   ) %>%
   # Construct species names
   mutate(
@@ -170,12 +223,15 @@ classification_df %>%
   select(id, kingdom, phylum, class, order, family, genus, species) %>%
   write_tsv(classification_out)
 
+write_tsv(homonym_manifest, manifest_out)
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 cat("\nDone.\n")
 cat("  Input:           ", fasta_in, "\n")
 cat("  Output FASTA:    ", fasta_out, "\n")
 cat("  Classification:  ", classification_out, "\n")
+cat("  Homonym manifest:", manifest_out, "\n")
 cat("  Sequences:       ", nrow(classification_df), "\n\n")
 for (rank in c("phylum", "class", "order", "family", "genus", "species")) {
   n_id   <- sum(classification_df[[rank]] != "unidentified")
