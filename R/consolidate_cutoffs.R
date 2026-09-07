@@ -3,7 +3,7 @@
 # nested similarity-cutoff table.
 #
 # Two problems in the raw <prefix>.cutoffs.json.txt produced by predict.R
-# (via 06a_predict_cutoffs.sh / 06b_predict_cutoffs_region.sh):
+# (via 07a_predict_cutoffs.sh / 07c_predict_cutoffs_parallel.sh):
 #
 #   1. Gaps: a (higher_rank, dataset, rank) cell is missing whenever that
 #      dataset's subset failed subset.R's min_subgroups/min_sequences filters,
@@ -33,7 +33,7 @@
 # Usage:
 #   Rscript R/consolidate_cutoffs.R \
 #     --cutoffs_in        data/full_ITS/eukaryome.cutoffs.json.txt \
-#     --classification_in data/full_ITS/eukaryome_ITS.classification \
+#     --classification_in data/full_ITS/eukaryome_ITS_nocomplex.classification \
 #     --output            data/full_ITS/eukaryome_cutoffs.txt
 #
 # Note: This script must be run from the project root directory.
@@ -90,6 +90,30 @@ cutoffs <- fread(opt$cutoffs_in, sep = "\t", header = TRUE)
 setnames(cutoffs,
          old = c("cut-off", "sequence number", "group number", "max proportion"),
          new = c("cutoff", "seq_n", "grp_n", "max_prop"))
+# "multiseq group number" (predict.R's --min_multiseq_groups guard, groups
+# with >= 2 sequences) may be absent from cutoffs files produced before that
+# flag existed, or NA on individual rows (e.g. entries loaded from an older
+# cached .predicted file that predates the field -- predict.R itself falls
+# back the same way via `%||% 0` when merging such entries). Either way, fall
+# back to grp_n (every group counted as multi-sequence) for the affected rows
+# so they are read with the pre-existing, unguarded resolve_cell() behaviour
+# rather than erroring or silently favouring/penalising candidates on missing
+# data.
+if (!"multiseq group number" %in% names(cutoffs)) {
+  cat("[consolidate] NOTE: input has no 'multiseq group number' column",
+      "(produced before --min_multiseq_groups existed) -- singleton-aware",
+      "candidate ranking is disabled for this run.\n")
+  cutoffs[, `multiseq group number` := NA_integer_]
+}
+setnames(cutoffs, old = "multiseq group number", new = "multiseq_grp_n")
+n_na_multiseq <- sum(is.na(cutoffs$multiseq_grp_n))
+if (n_na_multiseq > 0) {
+  cat(sprintf(
+    "[consolidate] NOTE: %d row(s) missing 'multiseq group number' -- falling back to group number for those rows.\n",
+    n_na_multiseq
+  ))
+  cutoffs[is.na(multiseq_grp_n), multiseq_grp_n := grp_n]
+}
 
 cat("[consolidate] Loading classification from:", opt$classification_in, "\n")
 # Default quoting (not quote = "") -- see R/predict.R load_classification()
@@ -174,6 +198,20 @@ lookup_row <- function(hr, ds, rk) {
 # ── Resolve one (higher_rank, dataset, target_rank) cell ─────────────────────
 # Returns a list describing the winning candidate, or NULL if nothing at all
 # (not even global) was found -- reported, not silently dropped.
+#
+# Singleton-aware override guard: a class of size 1 scores a free Dice = 1.0
+# at threshold 1.0 (2*1/(1+1)), so a dataset dominated by singleton groups
+# reports an inflated confidence regardless of biology (see predict.R's
+# --min_multiseq_groups). That guard already excludes the worst offenders
+# from ever reaching this file, but a candidate can still clear it with few
+# multi-sequence groups relative to self, e.g. self has 40 multiseq groups at
+# confidence 0.29 (a real fungal genus) and an ancestor has only 12 multiseq
+# groups at confidence 0.99 (mostly singletons) -- confidence alone would let
+# the weaker-evidence ancestor override a genuinely-computed self value.
+# Non-self candidates are therefore only eligible to override self if they
+# bring at least as much multi-sequence evidence as self itself; they can
+# still fill a genuine gap (no self_row at all) regardless of their own
+# multiseq_grp_n, since there is nothing to protect in that case.
 
 resolve_cell <- function(hr, dataset, target_rank, lineage) {
   candidates <- list()
@@ -182,7 +220,8 @@ resolve_cell <- function(hr, dataset, target_rank, lineage) {
   if (!is.null(self_row)) {
     candidates[[length(candidates) + 1]] <- list(
       source = "self", cutoff = self_row$cutoff, confidence = self_row$confidence,
-      seq_n = self_row$seq_n, grp_n = self_row$grp_n, max_prop = self_row$max_prop
+      seq_n = self_row$seq_n, grp_n = self_row$grp_n,
+      multiseq_grp_n = self_row$multiseq_grp_n, max_prop = self_row$max_prop
     )
   }
 
@@ -192,7 +231,8 @@ resolve_cell <- function(hr, dataset, target_rank, lineage) {
       candidates[[length(candidates) + 1]] <- list(
         source = sprintf("%s:%s", anc$rank, anc$name),
         cutoff = anc_row$cutoff, confidence = anc_row$confidence,
-        seq_n = anc_row$seq_n, grp_n = anc_row$grp_n, max_prop = anc_row$max_prop
+        seq_n = anc_row$seq_n, grp_n = anc_row$grp_n,
+        multiseq_grp_n = anc_row$multiseq_grp_n, max_prop = anc_row$max_prop
       )
     }
   }
@@ -201,12 +241,25 @@ resolve_cell <- function(hr, dataset, target_rank, lineage) {
   if (!is.null(global_row)) {
     candidates[[length(candidates) + 1]] <- list(
       source = "global", cutoff = global_row$cutoff, confidence = global_row$confidence,
-      seq_n = global_row$seq_n, grp_n = global_row$grp_n, max_prop = global_row$max_prop
+      seq_n = global_row$seq_n, grp_n = global_row$grp_n,
+      multiseq_grp_n = global_row$multiseq_grp_n, max_prop = global_row$max_prop
     )
   }
 
   candidates <- Filter(function(c) !is.na(c$confidence), candidates)
   if (length(candidates) == 0) return(NULL)
+
+  # Guard: if self is among the candidates, drop non-self candidates that
+  # bring less multi-sequence evidence than self before ranking by
+  # confidence -- self can never be excluded by its own guard.
+  has_self <- any(vapply(candidates, function(c) c$source == "self", logical(1)))
+  if (has_self) {
+    self_multiseq <- candidates[[which(vapply(candidates, function(c) c$source == "self", logical(1)))]]$multiseq_grp_n
+    candidates <- Filter(function(c) {
+      c$source == "self" || is.na(self_multiseq) || is.na(c$multiseq_grp_n) ||
+        c$multiseq_grp_n >= self_multiseq
+    }, candidates)
+  }
 
   # which.max returns the FIRST maximum, and candidates are ordered
   # self -> nearest ancestor -> ... -> global, so ties break toward
@@ -219,6 +272,7 @@ resolve_cell <- function(hr, dataset, target_rank, lineage) {
     confidence        = best$confidence,
     seq_n             = best$seq_n,
     grp_n             = best$grp_n,
+    multiseq_grp_n    = best$multiseq_grp_n,
     max_prop          = best$max_prop,
     original_cutoff   = if (!is.null(self_row)) self_row$cutoff     else NA_real_,
     original_confidence = if (!is.null(self_row)) self_row$confidence else NA_real_
@@ -245,7 +299,8 @@ for (hr in PARENT_RANKS) {
         results[[length(results) + 1]] <- data.table(
           rank = target_rank, higher_rank = hr, dataset = ds,
           cutoff = NA_real_, confidence = NA_real_,
-          seq_n = NA_integer_, grp_n = NA_integer_, max_prop = NA_real_,
+          seq_n = NA_integer_, grp_n = NA_integer_, multiseq_grp_n = NA_integer_,
+          max_prop = NA_real_,
           source = "unresolved", clamped = FALSE,
           original_cutoff = NA_real_, original_confidence = NA_real_
         )
@@ -254,7 +309,8 @@ for (hr in PARENT_RANKS) {
       results[[length(results) + 1]] <- data.table(
         rank = target_rank, higher_rank = hr, dataset = ds,
         cutoff = resolved$cutoff, confidence = resolved$confidence,
-        seq_n = resolved$seq_n, grp_n = resolved$grp_n, max_prop = resolved$max_prop,
+        seq_n = resolved$seq_n, grp_n = resolved$grp_n,
+        multiseq_grp_n = resolved$multiseq_grp_n, max_prop = resolved$max_prop,
         source = resolved$source, clamped = FALSE,
         original_cutoff = resolved$original_cutoff,
         original_confidence = resolved$original_confidence
@@ -300,11 +356,12 @@ cat(sprintf("[consolidate] %d cell(s) raised by the monotonicity clamp.\n", n_cl
 # ── Save ──────────────────────────────────────────────────────────────────────
 
 setnames(consolidated,
-         old = c("cutoff", "seq_n", "grp_n", "max_prop"),
-         new = c("cut-off", "sequence number", "group number", "max proportion"))
+         old = c("cutoff", "seq_n", "grp_n", "multiseq_grp_n", "max_prop"),
+         new = c("cut-off", "sequence number", "group number",
+                 "multiseq group number", "max proportion"))
 setcolorder(consolidated, c(
   "rank", "higher_rank", "dataset", "cut-off", "confidence",
-  "sequence number", "group number", "max proportion",
+  "sequence number", "group number", "multiseq group number", "max proportion",
   "source", "clamped", "original_cutoff", "original_confidence"
 ))
 

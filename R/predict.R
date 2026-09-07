@@ -110,6 +110,28 @@ option_list <- list(
   make_option("--min_cutoff",
               type = "double", default = 0, metavar = "NUM",
               help = "Min cutoff value to include in output [default: %default]"),
+  make_option("--min_multiseq_groups",
+              type = "integer", default = 0L, metavar = "INT",
+              help = paste("Min number of groups with >= 2 sequences required to report",
+                           "a cutoff. A group of size 1 scores a free Dice = 1.0 at",
+                           "threshold 1.0 (2*1/(1+1)), so datasets dominated by",
+                           "singleton groups have their optimum pinned at 1.0 by",
+                           "construction -- min_group_no alone does not catch this,",
+                           "since it counts groups regardless of size.",
+                           "Default 0 (off) preserves existing behaviour.",
+                           "[default: %default]")),
+  make_option("--iddef",
+              type = "integer", default = 2L, metavar = "0-4",
+              help = paste("vsearch --iddef pairwise identity definition.",
+                           "Default 2 (edit distance excluding terminal gaps) matches",
+                           "vsearch's own default and current pipeline behaviour.",
+                           "[default: %default]")),
+  make_option("--tie_tolerance",
+              type = "double", default = 0, metavar = "NUM",
+              help = paste("Widen the tied-optimum-threshold selection from exact",
+                           "equality to fmeasures >= best_f - tie_tolerance, still",
+                           "picking the middle of the tied range. Default 0 reproduces",
+                           "exact-equality selection exactly. [default: %default]")),
   make_option("--id_col",
               type = "character", default = "id", metavar = "STR",
               help = "ID column name in the classification file [default: %default]"),
@@ -173,6 +195,9 @@ min_seq_no      <- opt$min_seq_no
 max_seq_no      <- opt$max_seq_no
 max_prop_limit  <- opt$max_proportion
 min_cutoff      <- opt$min_cutoff
+min_multiseq_groups <- opt$min_multiseq_groups
+iddef           <- opt$iddef
+tie_tolerance   <- opt$tie_tolerance
 id_col          <- opt$id_col
 n_cpus          <- opt$n_cpus
 tmp_dir         <- opt$tmp_dir
@@ -249,13 +274,13 @@ load_sim <- function(sim_file) {
 # tmp_dir is used so workers writing concurrent subset FASTAs do not collide
 # with any files in the main output directory.
 
-compute_sim <- function(fasta_file, n_threads, tmp_dir) {
+compute_sim <- function(fasta_file, n_threads, tmp_dir, iddef = 2L) {
   if (!dir.exists(tmp_dir)) dir.create(tmp_dir, recursive = TRUE)
   vsearch_out <- file.path(tmp_dir, paste0(basename(fasta_file), ".vsearch.txt"))
 
   vsearch_cmd <- sprintf(
-    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields query+target+id --threads %d",
-    fasta_file, vsearch_out, n_threads
+    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields query+target+id --iddef %d --threads %d",
+    fasta_file, vsearch_out, iddef, n_threads
   )
   if (system(vsearch_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE) != 0) {
     stop("vsearch failed for: ", fasta_file)
@@ -417,7 +442,7 @@ max_proportion <- function(classes) {
 predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
                             start_t, end_t, step_t,
                             existing = list(), redo = FALSE,
-                            verbose = TRUE) {
+                            tie_tolerance = 0, verbose = TRUE) {
   # Restore any previously computed F-measures for this dataset
   saved_fm <- if ("fmeasures"  %in% names(existing)) existing$fmeasures   else list()
 
@@ -555,9 +580,11 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
     fmeasures[k]  <- all_fm[[t_str]] %||% 0
   }
 
-  # Select the middle threshold among all thresholds tied at the best F-measure
+  # Select the middle threshold among all thresholds within tie_tolerance of
+  # the best F-measure. tie_tolerance = 0 reproduces exact-equality selection
+  # (fmeasures are already rounded to 4dp by compute_fm(), so == is exact).
   best_f      <- max(fmeasures)
-  tied_idx    <- which(fmeasures == best_f)
+  tied_idx    <- which(fmeasures >= best_f - tie_tolerance)
   mid_pos     <- tied_idx[ceiling(length(tied_idx) / 2)]
   opt_t       <- thresholds[mid_pos]
 
@@ -598,10 +625,12 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
 process_dataset <- function(dataset_name, ds_ids, cls_df, rank, id_col,
                             sim_dt, fasta_file, output_dir,
                             start_t, end_t, step_t, redo, existing,
-                            max_prop_limit, vsearch_threads, tmp_dir) {
+                            max_prop_limit, vsearch_threads, tmp_dir,
+                            iddef = 2L, tie_tolerance = 0) {
   classes  <- load_classes(ds_ids, cls_df, rank, id_col)
   n_seqs   <- length(ds_ids)
   n_groups <- length(classes)
+  n_multiseq_groups <- sum(lengths(classes) >= 2L)
   max_prop <- max_proportion(classes)
 
   if (n_groups < 2) {
@@ -626,23 +655,24 @@ process_dataset <- function(dataset_name, ds_ids, cls_df, rank, id_col,
     tmp_fasta <- file.path(tmp_dir,
                            paste0(gsub("[^A-Za-z0-9_]", "_", dataset_name), "_subset.fasta"))
     write_subset_fasta(fasta_file, ds_ids, tmp_fasta)
-    working_sim <- compute_sim(tmp_fasta, vsearch_threads, tmp_dir)
+    working_sim <- compute_sim(tmp_fasta, vsearch_threads, tmp_dir, iddef)
     unlink(tmp_fasta)
   }
 
   result <- predict_dataset(
     dataset_name, ds_ids, classes, working_sim,
     start_t, end_t, step_t, existing, redo,
-    verbose = FALSE
+    tie_tolerance = tie_tolerance, verbose = FALSE
   )
 
   list(
-    skip         = FALSE,
-    dataset_name = dataset_name,
-    result       = result,
-    n_seqs       = n_seqs,
-    n_groups     = n_groups,
-    max_prop     = max_prop
+    skip              = FALSE,
+    dataset_name      = dataset_name,
+    result            = result,
+    n_seqs            = n_seqs,
+    n_groups          = n_groups,
+    n_multiseq_groups = n_multiseq_groups,
+    max_prop          = max_prop
   )
 }
 
@@ -653,7 +683,8 @@ process_dataset <- function(dataset_name, ds_ids, cls_df, rank, id_col,
 #   cutoffs_file.txt — tab-delimited plain-text summary for easy parsing
 
 save_results <- function(prediction_dict, output_file, cutoffs_file,
-                         min_group_no, min_seq_no, max_prop_limit, min_cutoff) {
+                         min_group_no, min_seq_no, max_prop_limit, min_cutoff,
+                         min_multiseq_groups = 0L) {
   # Full prediction file (includes per-threshold F-measure traces)
   write(toJSON(prediction_dict, auto_unbox = TRUE, pretty = TRUE), output_file)
 
@@ -662,14 +693,16 @@ save_results <- function(prediction_dict, output_file, cutoffs_file,
   for (rank in names(final)) {
     to_rm <- character(0)
     for (dname in names(final[[rank]])) {
-      d       <- final[[rank]][[dname]]
-      groupno <- d[["group number"]]    %||% 0
-      seqno   <- d[["sequence number"]] %||% 0
-      maxprop <- d[["max proportion"]]  %||% 0
-      cutoff  <- d[["cut-off"]]         %||% 0
+      d          <- final[[rank]][[dname]]
+      groupno    <- d[["group number"]]          %||% 0
+      multiseqno <- d[["multiseq group number"]] %||% 0
+      seqno      <- d[["sequence number"]]        %||% 0
+      maxprop    <- d[["max proportion"]]         %||% 0
+      cutoff     <- d[["cut-off"]]                %||% 0
 
       if (groupno < min_group_no || seqno < min_seq_no ||
-          maxprop > max_prop_limit || cutoff < min_cutoff) {
+          maxprop > max_prop_limit || cutoff < min_cutoff ||
+          multiseqno < min_multiseq_groups) {
         to_rm <- c(to_rm, dname)
       } else {
         # Strip the bulky fmeasures trace from the cutoffs-only output
@@ -684,7 +717,8 @@ save_results <- function(prediction_dict, output_file, cutoffs_file,
   # Tab-delimited plain-text summary
   txt_file <- paste0(cutoffs_file, ".txt")
   header   <- paste(c("rank", "higher_rank", "dataset", "cut-off", "confidence",
-                       "sequence number", "group number", "max proportion"),
+                       "sequence number", "group number",
+                       "multiseq group number", "max proportion"),
                     collapse = "\t")
   rows <- header
   for (rank in names(final)) {
@@ -692,13 +726,14 @@ save_results <- function(prediction_dict, output_file, cutoffs_file,
       d <- final[[rank]][[dname]]
       rows <- c(rows, paste(
         rank,
-        d[["higher_rank"]]     %||% "global",
+        d[["higher_rank"]]              %||% "global",
         dname,
-        d[["cut-off"]]         %||% 0,
-        d[["confidence"]]      %||% 0,
-        d[["sequence number"]] %||% 0,
-        d[["group number"]]    %||% 0,
-        d[["max proportion"]]  %||% 0,
+        d[["cut-off"]]                  %||% 0,
+        d[["confidence"]]               %||% 0,
+        d[["sequence number"]]          %||% 0,
+        d[["group number"]]             %||% 0,
+        d[["multiseq group number"]]    %||% 0,
+        d[["max proportion"]]           %||% 0,
         sep = "\t"
       ))
     }
@@ -745,7 +780,7 @@ if (end_t >= start_t && end_t > 0) {
     # Global prediction: compute similarity once for all sequences
     if (length(seq_ids) <= max_seq_no) {
       cat("[predict] No .sim file found. Computing similarity with vsearch...\n")
-      sim_dt <- compute_sim(fasta_file, n_cpus, tmp_dir)
+      sim_dt <- compute_sim(fasta_file, n_cpus, tmp_dir, iddef)
       save_sim(sim_dt, sim_file_path)
       cat("[predict] Similarity matrix saved to:", sim_file_path, "\n")
     } else {
@@ -907,17 +942,20 @@ for (rank in rank_list) {
           existing        = a$existing,
           max_prop_limit  = max_prop_limit,
           vsearch_threads = vthreads,
-          tmp_dir         = tmp_dir
+          tmp_dir         = tmp_dir,
+          iddef           = iddef,
+          tie_tolerance   = tie_tolerance
         ),
         error = function(e) {
           list(
-            skip         = FALSE,
-            dataset_name = a$dataset_name,
-            result       = list(error    = TRUE,
-                                error_msg = conditionMessage(e)),
-            n_seqs       = length(a$ds_ids),
-            n_groups     = NA_integer_,
-            max_prop     = NA_real_
+            skip              = FALSE,
+            dataset_name      = a$dataset_name,
+            result            = list(error    = TRUE,
+                                     error_msg = conditionMessage(e)),
+            n_seqs            = length(a$ds_ids),
+            n_groups          = NA_integer_,
+            n_multiseq_groups = NA_integer_,
+            max_prop          = NA_real_
           )
         }
       )
@@ -1002,13 +1040,14 @@ for (rank in rank_list) {
                       dn, result$opt_t, result$best_f, res$n_seqs, res$n_groups))
         }
         pred_datasets[[dn]] <- list(
-          "higher_rank"     = if (nchar(higher_rank_str) > 0) higher_rank_str else "global",
-          "cut-off"         = result$opt_t,
-          "confidence"      = result$best_f,
-          "sequence number" = res$n_seqs,
-          "group number"    = res$n_groups,
-          "max proportion"  = res$max_prop,
-          "fmeasures"       = result$fmeasures_dict
+          "higher_rank"          = if (nchar(higher_rank_str) > 0) higher_rank_str else "global",
+          "cut-off"              = result$opt_t,
+          "confidence"           = result$best_f,
+          "sequence number"      = res$n_seqs,
+          "group number"         = res$n_groups,
+          "multiseq group number" = res$n_multiseq_groups,
+          "max proportion"       = res$max_prop,
+          "fmeasures"            = result$fmeasures_dict
         )
       } else {
         n_errors <- n_errors + 1L
@@ -1050,14 +1089,15 @@ has_results <- any(sapply(prediction_dict, function(r) length(r) > 0))
 if (has_results) {
   cutoffs_file <- sub("\\.predicted$", ".cutoffs.json", prediction_file)
   save_results(prediction_dict, prediction_file, cutoffs_file,
-               min_group_no, min_seq_no, max_prop_limit, min_cutoff)
+               min_group_no, min_seq_no, max_prop_limit, min_cutoff,
+               min_multiseq_groups)
   cat(sprintf(
     "\n[predict] Done. Cutoffs reported for datasets with >= %d sequences,",
     min_seq_no
   ))
   cat(sprintf(
-    " >= %d groups, max proportion < %.2f, and cutoff >= %.4f.\n",
-    min_group_no, max_prop_limit, min_cutoff
+    " >= %d groups, >= %d multi-sequence groups, max proportion < %.2f, and cutoff >= %.4f.\n",
+    min_group_no, min_multiseq_groups, max_prop_limit, min_cutoff
   ))
 } else {
   cat("[predict] No prediction results to save.\n")
