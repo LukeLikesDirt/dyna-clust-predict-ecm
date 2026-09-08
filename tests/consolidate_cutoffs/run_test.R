@@ -42,15 +42,21 @@ output_path <- file.path(fixture_dir, "eukaryome_cutoffs.txt")
 # ══════════════════════════════════════════════════════════════════════════════
 
 row <- function(rank, higher_rank, dataset, cutoff, confidence,
-                seq_n = 100L, grp_n = 10L, max_prop = 0.2) {
-  data.table(
+                seq_n = 100L, grp_n = 10L, max_prop = 0.2, multiseq_grp_n = NULL) {
+  dt <- data.table(
     rank = rank, higher_rank = higher_rank, dataset = dataset,
     `cut-off` = cutoff, confidence = confidence,
     `sequence number` = seq_n, `group number` = grp_n, `max proportion` = max_prop
   )
+  # Only rows in the KingdomG scenario set this explicitly, exercising the
+  # singleton-aware override guard; every other scenario omits the column
+  # entirely, exercising the multiseq_grp_n := grp_n backward-compat fallback
+  # for cutoffs files produced before --min_multiseq_groups existed.
+  if (!is.null(multiseq_grp_n)) dt[, `multiseq group number` := multiseq_grp_n]
+  dt
 }
 
-cutoffs <- rbindlist(list(
+cutoffs <- rbindlist(fill = TRUE, list(
   # ── Global anchor (monotonic, confidence 0.50 throughout) ──────────────────
   row("phylum",  "global", "All", 0.60, 0.50, 5000L, 50L,   0.10),
   row("class",   "global", "All", 0.68, 0.50, 5000L, 80L,   0.10),
@@ -101,7 +107,29 @@ cutoffs <- rbindlist(list(
 
   # ── OrderF / FamilyF: ancestor-chain test, no kingdom/phylum/class rows ────
   row("genus",   "order",  "OrderF",  0.77, 0.60, 400L, 40L, 0.15),
-  row("species", "family", "FamilyF", 0.92, 0.85, 90L,  30L, 0.20)
+  row("species", "family", "FamilyF", 0.92, 0.85, 90L,  30L, 0.20),
+
+  # ── GenusG1/FamilyG: singleton-aware override guard ─────────────────────────
+  # self (GenusG1's own species prediction) has a modest but real confidence
+  # from real, multi-sequence data (multiseq_grp_n=40 of 120 groups) -- above
+  # the shared global anchor's 0.50 baseline so this scenario isolates the
+  # guard's effect rather than being decided by global. Its ancestor (FamilyG's
+  # species prediction) has HIGHER confidence but is almost entirely singletons
+  # (multiseq_grp_n=8 of 60 groups) -- the classic singleton-inflation shape
+  # (predict.R's --min_multiseq_groups guard keeps datasets this thin out of
+  # production, but a dataset can still clear that bar with few multiseq
+  # groups relative to a richer self row). Without the 2e guard the ancestor
+  # wins purely on confidence; with it, the ancestor is excluded for bringing
+  # less multi-sequence evidence than self.
+  row("species", "genus",  "GenusG1", 0.85, 0.55, 300L, 120L, multiseq_grp_n = 40L),
+  row("species", "family", "FamilyG", 0.99, 0.99, 60L,  60L,  multiseq_grp_n = 8L),
+
+  # ── GenusH1/FamilyH: legitimate override still works ────────────────────────
+  # Same shape, but the ancestor genuinely brings MORE multi-sequence evidence
+  # than self (45 >= 40) as well as higher confidence -- confirms the guard
+  # does not block a real, well-supported override.
+  row("species", "genus",  "GenusH1", 0.85, 0.55, 300L, 120L, multiseq_grp_n = 40L),
+  row("species", "family", "FamilyH", 0.99, 0.99, 500L, 500L, multiseq_grp_n = 45L)
 ))
 
 fwrite(cutoffs, cutoffs_in, sep = "\t", quote = FALSE)
@@ -124,7 +152,9 @@ classification <- rbindlist(list(
   # F-lineage: 3 consistent rows so the modal parent is unambiguous
   cls_row("f1", "KingdomF", "PhylumF", "ClassF", "OrderF", "FamilyF", "GenusF1", "SpeciesF1"),
   cls_row("f2", "KingdomF", "PhylumF", "ClassF", "OrderF", "FamilyF", "GenusF2", "SpeciesF2"),
-  cls_row("f3", "KingdomF", "PhylumF", "ClassF", "OrderF", "FamilyF", "GenusF1", "SpeciesF3")
+  cls_row("f3", "KingdomF", "PhylumF", "ClassF", "OrderF", "FamilyF", "GenusF1", "SpeciesF3"),
+  cls_row("g1", "KingdomG", "PhylumG", "ClassG", "OrderG", "FamilyG", "GenusG1", "SpeciesG1"),
+  cls_row("h1", "KingdomH", "PhylumH", "ClassH", "OrderH", "FamilyH", "GenusH1", "SpeciesH1")
 ))
 
 fwrite(classification, class_in, sep = "\t", quote = FALSE)
@@ -276,6 +306,20 @@ check("OrderF.genus clamped flag is TRUE", "order", "OrderF", "genus", "clamped"
 check("OrderF.genus source remains self (clamp doesn't change source)", "order", "OrderF", "genus", "source", "self")
 check("OrderF.genus original_cutoff preserved", "order", "OrderF", "genus", "original_cutoff", 0.77)
 check("OrderF.species filled from global", "order", "OrderF", "species", "cutoff", 0.95)
+
+cat("\n══════════════════════════════════════════════════════════════\n")
+cat("GenusG1 -- singleton-aware guard: weak-evidence ancestor excluded\n")
+cat("══════════════════════════════════════════════════════════════\n")
+check("GenusG1.species self wins despite lower confidence", "genus", "GenusG1", "species", "cutoff", 0.85)
+check("GenusG1.species source is self (ancestor excluded by guard)", "genus", "GenusG1", "species", "source", "self")
+check("GenusG1.species confidence is self's own (0.55), not ancestor's 0.99", "genus", "GenusG1", "species", "confidence", 0.55)
+
+cat("\n══════════════════════════════════════════════════════════════\n")
+cat("GenusH1 -- guard does not block a genuinely well-supported override\n")
+cat("══════════════════════════════════════════════════════════════\n")
+check("GenusH1.species overridden by ancestor (>= self's multiseq evidence)", "genus", "GenusH1", "species", "cutoff", 0.99)
+check("GenusH1.species source is family:FamilyH", "genus", "GenusH1", "species", "source", "family:FamilyH")
+check("GenusH1.species confidence is ancestor's 0.99", "genus", "GenusH1", "species", "confidence", 0.99)
 
 cat("\n══════════════════════════════════════════════════════════════\n")
 cat(sprintf("RESULT: %d passed, %d failed\n", n_pass, n_fail))
