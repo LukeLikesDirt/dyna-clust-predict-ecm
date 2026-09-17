@@ -27,6 +27,12 @@ option_list <- list(
   make_option("--min_sim",
               type = "double", default = 0, metavar = "NUM",
               help = "Minimum similarity score to write to output [default: %default]"),
+  make_option("--iddef",
+              type = "integer", default = 2L, metavar = "0-4",
+              help = paste("vsearch --iddef pairwise identity definition.",
+                           "Default 2 (edit distance excluding terminal gaps) matches",
+                           "vsearch's own default and current pipeline behaviour.",
+                           "[default: %default]")),
   make_option("--n_cpus",
               type = "integer", default = max(1L, parallel::detectCores() - 1L), metavar = "INT",
               help = "CPU threads for vsearch [default: all cores minus one]"),
@@ -53,6 +59,7 @@ if (!file.exists(opt$input)) stop("FASTA file not found: ", opt$input)
 fasta_file <- opt$input
 output_dir <- opt$out
 min_sim    <- opt$min_sim
+iddef      <- opt$iddef
 n_cpus     <- opt$n_cpus
 tmp_dir    <- opt$tmp_dir
 
@@ -65,12 +72,12 @@ strip_ext <- function(path) sub("\\.[^./]+$", "", basename(path))
 
 # ── vsearch all-vs-all ────────────────────────────────────────────────────────
 
-compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir) {
+compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, iddef) {
   vsearch_out <- file.path(tmp_dir, paste0(basename(fasta_file), ".vsearch.txt"))
 
   vsearch_cmd <- sprintf(
-    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields query+target+id --threads %d",
-    fasta_file, vsearch_out, n_cpus
+    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields query+target+id --iddef %d --threads %d",
+    fasta_file, vsearch_out, iddef, n_cpus
   )
   cat("[sim] Running vsearch --allpairs_global...\n")
   if (system(vsearch_cmd) != 0) stop("vsearch failed. Is vsearch installed and on PATH?")
