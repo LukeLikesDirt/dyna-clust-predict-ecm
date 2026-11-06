@@ -110,6 +110,15 @@ option_list <- list(
   make_option("--min_cutoff",
               type = "double", default = 0, metavar = "NUM",
               help = "Min cutoff value to include in output [default: %default]"),
+  make_option("--min_cov",
+              type = "double", default = 0, metavar = "0-100",
+              help = paste("Ignore pairs whose vsearch qcov or tcov is below this",
+                           "percentage. vsearch's default identity definition excludes",
+                           "terminal gaps, so two unrelated sequences can score 100% from",
+                           "a few overlapping bases, and single linkage then chains them",
+                           "together. Applies only to similarities computed by this run,",
+                           "not to a loaded .sim file.",
+                           "Default 0 (off) preserves existing behaviour. [default: %default]")),
   make_option("--id_col",
               type = "character", default = "id", metavar = "STR",
               help = "ID column name in the classification file [default: %default]"),
@@ -124,7 +133,9 @@ option_list <- list(
               help = "Run datasets in parallel using furrr/future [default: %default]"),
   make_option("--redo",
               type = "character", default = "no", metavar = "yes/no",
-              help = "Recompute F-measures even if cached [default: %default]"),
+              help = paste("Recompute F-measures even if cached in <prefix>.predicted, and",
+                           "ignore a <prefix>.sim left at the default path by an earlier run.",
+                           "An explicit --sim is still used. [default: %default]")),
   make_option("--tmp_dir",
               type = "character", default = "./tmp", metavar = "DIR",
               help = "Directory for temporary vsearch output [default: %default]")
@@ -155,6 +166,12 @@ if (is.null(opt$input))           stop("--input is required.")
 if (!file.exists(opt$input))      stop("FASTA file not found: ", opt$input)
 if (opt$rank == "")               stop("--rank is required (e.g. --rank species).")
 if (nchar(opt$classification) == 0) stop("--classification is required.")
+if (is.na(opt$min_cov) || opt$min_cov < 0 || opt$min_cov > 100) {
+  stop("--min_cov must be a percentage between 0 and 100.")
+}
+if (opt$min_cov > 0 && opt$min_cov <= 1) {
+  stop("--min_cov is a percentage: use 80 for 80%, not 0.8.")
+}
 
 # ── Assign parameters to short names ─────────────────────────────────────────
 
@@ -176,6 +193,7 @@ min_cutoff      <- opt$min_cutoff
 id_col          <- opt$id_col
 n_cpus          <- opt$n_cpus
 tmp_dir         <- opt$tmp_dir
+min_cov         <- opt$min_cov
 
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
@@ -248,14 +266,17 @@ load_sim <- function(sim_file) {
 # ignore.stdout / ignore.stderr suppress per-worker vsearch logging noise.
 # tmp_dir is used so workers writing concurrent subset FASTAs do not collide
 # with any files in the main output directory.
+# min_cov > 0 drops pairs where either sequence is covered below that percentage.
 
-compute_sim <- function(fasta_file, n_threads, tmp_dir) {
+compute_sim <- function(fasta_file, n_threads, tmp_dir, min_cov = 0) {
   if (!dir.exists(tmp_dir)) dir.create(tmp_dir, recursive = TRUE)
   vsearch_out <- file.path(tmp_dir, paste0(basename(fasta_file), ".vsearch.txt"))
 
+  gated      <- min_cov > 0
+  userfields <- if (gated) "query+target+id+qcov+tcov" else "query+target+id"
   vsearch_cmd <- sprintf(
-    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields query+target+id --threads %d",
-    fasta_file, vsearch_out, n_threads
+    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields %s --threads %d",
+    fasta_file, vsearch_out, userfields, n_threads
   )
   if (system(vsearch_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE) != 0) {
     stop("vsearch failed for: ", fasta_file)
@@ -264,13 +285,18 @@ compute_sim <- function(fasta_file, n_threads, tmp_dir) {
     stop("vsearch produced no output for: ", fasta_file)
   }
 
-  # Parse: query <tab> target <tab> percent_identity
+  # Parse: query <tab> target <tab> percent_identity [<tab> qcov <tab> tcov]
   b <- fread(vsearch_out, sep = "\t", header = FALSE,
-             col.names = c("qid", "sid", "pident"),
-             colClasses = c("character", "character", "numeric"))
+             col.names = c("qid", "sid", "pident", if (gated) c("qcov", "tcov")),
+             colClasses = c("character", "character", "numeric",
+                            if (gated) c("numeric", "numeric")))
   b[, score := round(pident / 100, 4)]
 
+  # Taken before gating, so a sequence with every pair gated out stays as a
+  # self-only node rather than disappearing from the matrix.
   all_ids <- unique(c(b$qid, b$sid))
+  if (gated) b <- b[qcov >= min_cov & tcov >= min_cov]
+
   sim_dt  <- rbindlist(list(
     data.table(i = b$qid,   j = b$sid,   score = b$score),
     data.table(i = b$sid,   j = b$qid,   score = b$score),
@@ -598,7 +624,8 @@ predict_dataset <- function(dataset_name, seq_ids, classes, sim_dt,
 process_dataset <- function(dataset_name, ds_ids, cls_df, rank, id_col,
                             sim_dt, fasta_file, output_dir,
                             start_t, end_t, step_t, redo, existing,
-                            max_prop_limit, vsearch_threads, tmp_dir) {
+                            max_prop_limit, vsearch_threads, tmp_dir,
+                            min_cov = 0) {
   classes  <- load_classes(ds_ids, cls_df, rank, id_col)
   n_seqs   <- length(ds_ids)
   n_groups <- length(classes)
@@ -626,7 +653,7 @@ process_dataset <- function(dataset_name, ds_ids, cls_df, rank, id_col,
     tmp_fasta <- file.path(tmp_dir,
                            paste0(gsub("[^A-Za-z0-9_]", "_", dataset_name), "_subset.fasta"))
     write_subset_fasta(fasta_file, ds_ids, tmp_fasta)
-    working_sim <- compute_sim(tmp_fasta, vsearch_threads, tmp_dir)
+    working_sim <- compute_sim(tmp_fasta, vsearch_threads, tmp_dir, min_cov)
     unlink(tmp_fasta)
   }
 
@@ -738,14 +765,29 @@ sim_file_path <- if (nchar(sim_file_arg) > 0) sim_file_arg else
 # ── Load or compute the similarity matrix ─────────────────────────────────────
 sim_dt <- data.table(i = character(0), j = character(0), score = numeric(0))
 
+# A .sim at the default path was written by an earlier global prediction, for
+# that call's sequences only, so a later call with different sequences but the
+# same --out and --prefix would find most of them with no edges. --redo yes
+# therefore recomputes it. An explicit --sim is always used.
+use_saved_sim <- file.exists(sim_file_path) && (nchar(sim_file_arg) > 0 || !redo)
+
+if (min_cov > 0 && use_saved_sim) {
+  cat("[predict] WARNING: --min_cov does not apply to the loaded similarity matrix:",
+      sim_file_path, "\n[predict]   It must already be gated (R/compute_sim.R --min_cov).\n")
+}
+if (min_cov > 0 && !redo && length(prediction_dict) > 0) {
+  cat("[predict] WARNING: --min_cov without --redo yes reuses any F-measures cached in",
+      prediction_file, "\n[predict]   whatever gate they were computed with.\n")
+}
+
 if (end_t >= start_t && end_t > 0) {
-  if (file.exists(sim_file_path)) {
+  if (use_saved_sim) {
     sim_dt <- load_sim(sim_file_path)
   } else if (length(higher_rank_list) == 0) {
     # Global prediction: compute similarity once for all sequences
     if (length(seq_ids) <= max_seq_no) {
       cat("[predict] No .sim file found. Computing similarity with vsearch...\n")
-      sim_dt <- compute_sim(fasta_file, n_cpus, tmp_dir)
+      sim_dt <- compute_sim(fasta_file, n_cpus, tmp_dir, min_cov)
       save_sim(sim_dt, sim_file_path)
       cat("[predict] Similarity matrix saved to:", sim_file_path, "\n")
     } else {
@@ -907,7 +949,8 @@ for (rank in rank_list) {
           existing        = a$existing,
           max_prop_limit  = max_prop_limit,
           vsearch_threads = vthreads,
-          tmp_dir         = tmp_dir
+          tmp_dir         = tmp_dir,
+          min_cov         = min_cov
         ),
         error = function(e) {
           list(

@@ -49,6 +49,25 @@ The workflow is conceptually adapted from
 
 All scripts must be run from the **project root directory**.
 
+### Coverage gate and re-runs
+
+vsearch's default identity definition ignores terminal gaps, so two unrelated
+sequences can score 100% from a few overlapping bases, and single linkage then
+chains broad datasets together. `05_compute_sim.sh` therefore passes `--min_cov 80`
+to `R/compute_sim.R`, which drops pairs where either sequence is covered below 80%
+(`MIN_COV` in the script; 0 turns it off). `06_predict_ecm_cutoffs.sh` passes the
+same gate to `predict.R` whenever `predict.R` computes the similarities itself
+(`--min_cov` has no effect on a loaded `--sim` matrix). It saves the global matrix
+as `data/full_ITS/ecm_lineage.sim`, records the gate in `ecm_lineage.sim.min_cov`,
+and sets aside a saved matrix built without the current gate as
+`ecm_lineage.sim.pre_min_cov` instead of reusing it silently.
+
+`06` also passes `--redo yes`. Without it, F-measures cached in `<prefix>.predicted`
+are reused even after the sequences or the gate change, so `sequence number`
+updates while `cut-off` and `confidence` stay frozen. `--redo yes` overwrites only
+the datasets in the current run, so for a clean re-prediction first move the old
+`data/full_ITS/*.predicted` and `data/full_ITS/*.cutoffs.json*` aside.
+
 ### Alphanumeric taxon codes
 
 Tedersoo *et al.* (2024, *MycoKeys* 107: 273–325) propose an alphanumeric

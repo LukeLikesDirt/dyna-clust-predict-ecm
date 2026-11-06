@@ -27,6 +27,10 @@ option_list <- list(
   make_option("--min_sim",
               type = "double", default = 0, metavar = "NUM",
               help = "Minimum similarity score to write to output [default: %default]"),
+  make_option("--min_cov",
+              type = "double", default = 0, metavar = "0-100",
+              help = paste("Drop pairs whose vsearch qcov or tcov is below this percentage.",
+                           "Default 0 (off). See R/predict.R --min_cov. [default: %default]")),
   make_option("--n_cpus",
               type = "integer", default = max(1L, parallel::detectCores() - 1L), metavar = "INT",
               help = "CPU threads for vsearch [default: all cores minus one]"),
@@ -49,10 +53,17 @@ opt <- parse_args(
 
 if (is.null(opt$input))      stop("--input is required. Run with --help for usage.")
 if (!file.exists(opt$input)) stop("FASTA file not found: ", opt$input)
+if (is.na(opt$min_cov) || opt$min_cov < 0 || opt$min_cov > 100) {
+  stop("--min_cov must be a percentage between 0 and 100.")
+}
+if (opt$min_cov > 0 && opt$min_cov <= 1) {
+  stop("--min_cov is a percentage: use 80 for 80%, not 0.8.")
+}
 
 fasta_file <- opt$input
 output_dir <- opt$out
 min_sim    <- opt$min_sim
+min_cov    <- opt$min_cov
 n_cpus     <- opt$n_cpus
 tmp_dir    <- opt$tmp_dir
 
@@ -65,12 +76,14 @@ strip_ext <- function(path) sub("\\.[^./]+$", "", basename(path))
 
 # ── vsearch all-vs-all ────────────────────────────────────────────────────────
 
-compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir) {
+compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, min_cov = 0) {
   vsearch_out <- file.path(tmp_dir, paste0(basename(fasta_file), ".vsearch.txt"))
 
+  gated      <- min_cov > 0
+  userfields <- if (gated) "query+target+id+qcov+tcov" else "query+target+id"
   vsearch_cmd <- sprintf(
-    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields query+target+id --threads %d",
-    fasta_file, vsearch_out, n_cpus
+    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields %s --threads %d",
+    fasta_file, vsearch_out, userfields, n_cpus
   )
   cat("[sim] Running vsearch --allpairs_global...\n")
   if (system(vsearch_cmd) != 0) stop("vsearch failed. Is vsearch installed and on PATH?")
@@ -81,11 +94,16 @@ compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir) {
 
   cat("[sim] Parsing vsearch output...\n")
   b <- fread(vsearch_out, sep = "\t", header = FALSE,
-             col.names = c("qid", "sid", "pident"), nThread = n_cpus)
+             col.names = c("qid", "sid", "pident", if (gated) c("qcov", "tcov")),
+             nThread = n_cpus)
   b[, score := round(pident / 100, 4)]
   b[, pident := NULL]
 
+  # Taken before gating, so a sequence with every pair gated out stays as a
+  # self-only node rather than disappearing from the matrix.
   all_ids <- unique(c(b$qid, b$sid))
+  if (gated) b <- b[qcov >= min_cov & tcov >= min_cov]
+
   sim_dt  <- rbindlist(list(
     b[, .(i = qid, j = sid, score)],
     b[, .(i = sid, j = qid, score)],
@@ -104,7 +122,7 @@ cat("[sim] Input:   ", fasta_file, "\n")
 cat("[sim] Threads: ", n_cpus, "\n")
 cat("[sim] Tmp dir: ", tmp_dir, "\n\n")
 
-sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir)
+sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir, min_cov)
 out_file <- file.path(output_dir, paste0(strip_ext(fasta_file), ".sim"))
 
 cat("[sim] Saving similarity matrix to:", out_file, "\n")

@@ -29,6 +29,11 @@
 readonly SIM="./R/compute_sim.R"
 readonly TMP_DIR="./tmp"
 readonly MIN_SIM=0.7
+# A pair counts only if vsearch's qcov and tcov are both at least this
+# percentage. vsearch's default identity definition excludes terminal gaps, so
+# unrelated sequences can score 100% from a few overlapping bases, which chains
+# broad datasets together under single linkage. 0 turns the gate off.
+readonly MIN_COV=80
 readonly N_CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 readonly INPUT_FASTA="data/full_ITS/ecm_family.fasta"
 readonly OUTPUT_DIR="data/full_ITS/"
@@ -65,11 +70,13 @@ echo "=== COMPUTING VSEARCH SPECIES SIMILARITY MATRICES ==="
 echo "$(date)"
 echo "Threads : $N_CPUS"
 echo "min_sim : $MIN_SIM"
+echo "min_cov : $MIN_COV"
 echo ""
 Rscript "$SIM" \
         --input    "$INPUT_FASTA" \
         --out      "$OUTPUT_DIR" \
         --min_sim  "$MIN_SIM" \
+        --min_cov  "$MIN_COV" \
         --n_cpus   "$N_CPUS"
 
 # =============================================================================
