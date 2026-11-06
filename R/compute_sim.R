@@ -27,6 +27,12 @@ option_list <- list(
   make_option("--min_sim",
               type = "double", default = 0, metavar = "NUM",
               help = "Minimum similarity score to write to output [default: %default]"),
+  make_option("--iddef",
+              type = "integer", default = 2L, metavar = "0-4",
+              help = paste("vsearch --iddef pairwise identity definition.",
+                           "Default 2 (edit distance excluding terminal gaps) matches",
+                           "vsearch's own default and current pipeline behaviour.",
+                           "[default: %default]")),
   make_option("--min_cov",
               type = "double", default = 0, metavar = "0-100",
               help = paste("Drop pairs whose vsearch qcov or tcov is below this percentage.",
@@ -63,6 +69,7 @@ if (opt$min_cov > 0 && opt$min_cov <= 1) {
 fasta_file <- opt$input
 output_dir <- opt$out
 min_sim    <- opt$min_sim
+iddef      <- opt$iddef
 min_cov    <- opt$min_cov
 n_cpus     <- opt$n_cpus
 tmp_dir    <- opt$tmp_dir
@@ -76,14 +83,14 @@ strip_ext <- function(path) sub("\\.[^./]+$", "", basename(path))
 
 # ── vsearch all-vs-all ────────────────────────────────────────────────────────
 
-compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, min_cov = 0) {
+compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, iddef, min_cov = 0) {
   vsearch_out <- file.path(tmp_dir, paste0(basename(fasta_file), ".vsearch.txt"))
 
   gated      <- min_cov > 0
   userfields <- if (gated) "query+target+id+qcov+tcov" else "query+target+id"
   vsearch_cmd <- sprintf(
-    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields %s --threads %d",
-    fasta_file, vsearch_out, userfields, n_cpus
+    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields %s --iddef %d --threads %d",
+    fasta_file, vsearch_out, userfields, iddef, n_cpus
   )
   cat("[sim] Running vsearch --allpairs_global...\n")
   if (system(vsearch_cmd) != 0) stop("vsearch failed. Is vsearch installed and on PATH?")
@@ -122,7 +129,7 @@ cat("[sim] Input:   ", fasta_file, "\n")
 cat("[sim] Threads: ", n_cpus, "\n")
 cat("[sim] Tmp dir: ", tmp_dir, "\n\n")
 
-sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir, min_cov)
+sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir, iddef, min_cov)
 out_file <- file.path(output_dir, paste0(strip_ext(fasta_file), ".sim"))
 
 cat("[sim] Saving similarity matrix to:", out_file, "\n")
