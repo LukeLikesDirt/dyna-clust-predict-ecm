@@ -16,6 +16,8 @@ slurm/
 *.predicted
 *.cutoffs.json
 *.cutoffs.json.txt
+*_raw_cutoffs.json
+*_raw_cutoffs.txt
 
 # R session artefacts
 .Rhistory
