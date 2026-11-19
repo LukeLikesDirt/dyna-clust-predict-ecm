@@ -32,15 +32,15 @@ readonly MIN_SEQ=20
 readonly MIN_GROUPS=5
 readonly N_CPUS="${SLURM_CPUS_PER_TASK:-$(nproc)}"
 readonly RUN_PARALLEL="yes"
-# A pair counts only if vsearch's qcov and tcov are both at least this
-# percentage. vsearch's default identity definition excludes terminal gaps, so
-# unrelated sequences can score 100% from a few overlapping bases, which chains
-# broad datasets together under single linkage. 0 turns the gate off.
-# predict.R applies it only to similarities it computes itself (see the
-# SIMILARITY MATRIX AND COVERAGE GATE block below).
-readonly MIN_COV=80
-# Recompute F-measures instead of reusing those cached in <prefix>.predicted,
-# which otherwise stay frozen when the sequences or MIN_COV change.
+# vsearch identity definition. 2 = terminal gaps excluded.
+readonly IDDEF=2
+# Minimum overlap (bp) for a pair to count; without it, sequences that share a
+# few bases score 100% under IDDEF=2. Set to the minimum sequence length (02).
+# predict.R applies both only to similarities it computes itself (see the
+# SIMILARITY MATRIX block below).
+readonly MIN_OVERLAP=250
+# Recompute F-measures instead of reusing those cached in <prefix>.predicted;
+# the cache is not refreshed when inputs or settings change.
 readonly REDO="yes"
 
 # INPUTS
@@ -85,24 +85,20 @@ for f in "$ECM_GENERA" "$INPUT_FASTA_SRC" "$INPUT_CLASS_SRC"; do
 done
 
 # =============================================================================
-# SIMILARITY MATRIX AND COVERAGE GATE
+# SIMILARITY MATRIX
 # predict.R computes the similarity itself (per dataset for the local run, once
 # for the global run, which saves it as $INPUT_SIM) unless $INPUT_SIM already
-# exists, and then ignores --min_cov. A matrix left by a run without the gate
-# would therefore keep it off silently, so it is set aside unless it was built
-# with the current MIN_COV (recorded in $INPUT_SIM.min_cov after the global run).
+# exists, and then loads it as is. A saved matrix is therefore set aside unless
+# it was built with the current settings (recorded in $INPUT_SIM.gate after the
+# global run).
 # =============================================================================
 
-readonly SIM_GATE_FILE="${INPUT_SIM}.min_cov"
-if [[ -f "$INPUT_SIM" && "$(cat "$SIM_GATE_FILE" 2>/dev/null)" != "$MIN_COV" ]]; then
-    echo "Setting aside $INPUT_SIM (not built with --min_cov $MIN_COV): ${INPUT_SIM}.pre_min_cov"
-    mv "$INPUT_SIM" "${INPUT_SIM}.pre_min_cov"
+readonly SIM_GATE="iddef=${IDDEF} min_overlap=${MIN_OVERLAP}"
+readonly SIM_GATE_FILE="${INPUT_SIM}.gate"
+if [[ -f "$INPUT_SIM" && "$(cat "$SIM_GATE_FILE" 2>/dev/null)" != "$SIM_GATE" ]]; then
+    echo "Setting aside $INPUT_SIM (not built with $SIM_GATE): ${INPUT_SIM}.old"
+    mv "$INPUT_SIM" "${INPUT_SIM}.old"
 fi
-
-# Passed only when predict.R will compute the matrices itself; given a matrix
-# that is already gated it would only print a warning.
-COV_ARGS=(--min_cov "$MIN_COV")
-[[ -f "$INPUT_SIM" ]] && COV_ARGS=()
 
 # =============================================================================
 # BUILD ecm_lineage.classification
@@ -204,7 +200,8 @@ Rscript "$PREDICT" \
     --id_col          id \
     --run_parallel    "$RUN_PARALLEL" \
     --redo            "$REDO" \
-    "${COV_ARGS[@]}" \
+    --iddef           "$IDDEF" \
+    --min_overlap     "$MIN_OVERLAP" \
     --n_cpus          "$N_CPUS" \
     --tmp_dir         "$TMP_DIR" \
     --out             "$OUT_DIR"
@@ -227,17 +224,17 @@ Rscript "$PREDICT" \
     --id_col          id \
     --run_parallel    "$RUN_PARALLEL" \
     --redo            "$REDO" \
-    "${COV_ARGS[@]}" \
+    --iddef           "$IDDEF" \
+    --min_overlap     "$MIN_OVERLAP" \
     --n_cpus          "$N_CPUS" \
     --tmp_dir         "$TMP_DIR" \
     --out             "$OUT_DIR"
 
-# Record the gate the saved matrix was built with (see above).
-[[ -f "$INPUT_SIM" ]] && echo "$MIN_COV" > "$SIM_GATE_FILE"
+# Record the settings the saved matrix was built with (see above).
+[[ -f "$INPUT_SIM" ]] && echo "$SIM_GATE" > "$SIM_GATE_FILE"
 
 echo ""
 echo "Cutoff files written to ${OUT_DIR}:"
-echo "  Local cutoffs  : ${PREFIX}.cutoffs.json"
-echo "  Global cutoffs : ${PREFIX}.cutoffs.json"
+echo "  Local and global cutoffs : ${PREFIX}_raw_cutoffs.txt (and .json)"
 
 conda deactivate
