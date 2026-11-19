@@ -27,10 +27,16 @@ option_list <- list(
   make_option("--min_sim",
               type = "double", default = 0, metavar = "NUM",
               help = "Minimum similarity score to write to output [default: %default]"),
-  make_option("--min_cov",
-              type = "double", default = 0, metavar = "0-100",
-              help = paste("Drop pairs whose vsearch qcov or tcov is below this percentage.",
-                           "Default 0 (off). See R/predict.R --min_cov. [default: %default]")),
+  make_option("--iddef",
+              type = "integer", default = 2L, metavar = "0-4",
+              help = paste("vsearch --iddef pairwise identity definition.",
+                           "Default 2 (terminal gaps excluded), as in R/predict.R.",
+                           "[default: %default]")),
+  make_option("--min_overlap",
+              type = "integer", default = 0L, metavar = "BP",
+              help = paste("Drop pairs whose alignment, terminal gaps excluded, is shorter",
+                           "than this many bp (vsearch --mincols). See R/predict.R",
+                           "--min_overlap. Default 0 (off). [default: %default]")),
   make_option("--n_cpus",
               type = "integer", default = max(1L, parallel::detectCores() - 1L), metavar = "INT",
               help = "CPU threads for vsearch [default: all cores minus one]"),
@@ -45,7 +51,8 @@ opt <- parse_args(
     usage        = "%prog [options] -i sequences.fasta",
     description  = paste(
       "Compute a pairwise vsearch similarity matrix using --allpairs_global.",
-      "Similarity = pident / 100 (global alignment identity, no coverage penalty).",
+      "Similarity = pident / 100 (global alignment identity, --iddef 2 by default:",
+      "terminal gaps excluded; --min_overlap drops pairs that share too few bases).",
       "The matrix is symmetrised; the maximum score is kept for each pair."
     )
   )
@@ -53,18 +60,17 @@ opt <- parse_args(
 
 if (is.null(opt$input))      stop("--input is required. Run with --help for usage.")
 if (!file.exists(opt$input)) stop("FASTA file not found: ", opt$input)
-if (is.na(opt$min_cov) || opt$min_cov < 0 || opt$min_cov > 100) {
-  stop("--min_cov must be a percentage between 0 and 100.")
-}
-if (opt$min_cov > 0 && opt$min_cov <= 1) {
-  stop("--min_cov is a percentage: use 80 for 80%, not 0.8.")
+if (is.na(opt$iddef) || !opt$iddef %in% 0:4) stop("--iddef must be 0, 1, 2, 3 or 4.")
+if (is.na(opt$min_overlap) || opt$min_overlap < 0) {
+  stop("--min_overlap must be a non-negative number of bp (0 disables it).")
 }
 
-fasta_file <- opt$input
-output_dir <- opt$out
-min_sim    <- opt$min_sim
-min_cov    <- opt$min_cov
-n_cpus     <- opt$n_cpus
+fasta_file  <- opt$input
+output_dir  <- opt$out
+min_sim     <- opt$min_sim
+iddef       <- opt$iddef
+min_overlap <- opt$min_overlap
+n_cpus      <- opt$n_cpus
 tmp_dir    <- opt$tmp_dir
 
 if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
@@ -76,34 +82,45 @@ strip_ext <- function(path) sub("\\.[^./]+$", "", basename(path))
 
 # ── vsearch all-vs-all ────────────────────────────────────────────────────────
 
-compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, min_cov = 0) {
+compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, iddef = 2L, min_overlap = 0L) {
   vsearch_out <- file.path(tmp_dir, paste0(basename(fasta_file), ".vsearch.txt"))
 
-  gated      <- min_cov > 0
-  userfields <- if (gated) "query+target+id+qcov+tcov" else "query+target+id"
+  # --acceptall switches off every accept/reject criterion, --mincols included,
+  # so a minimum overlap accepts any identity (--id 0) instead. Rejected pairs
+  # are absent from vsearch's output, so the node set comes from the FASTA: a
+  # sequence whose every pair is rejected stays as a self-only node. See
+  # compute_sim() in R/predict.R.
+  gated  <- min_overlap > 0
+  accept <- if (gated) sprintf("--id 0 --mincols %d", as.integer(min_overlap)) else "--acceptall"
   vsearch_cmd <- sprintf(
-    "vsearch --allpairs_global '%s' --acceptall --userout '%s' --userfields %s --threads %d",
-    fasta_file, vsearch_out, userfields, n_cpus
+    "vsearch --allpairs_global '%s' %s --userout '%s' --userfields query+target+id --iddef %d --threads %d",
+    fasta_file, accept, vsearch_out, iddef, n_cpus
   )
   cat("[sim] Running vsearch --allpairs_global...\n")
   if (system(vsearch_cmd) != 0) stop("vsearch failed. Is vsearch installed and on PATH?")
 
-  if (!file.exists(vsearch_out) || file.info(vsearch_out)$size == 0) {
+  no_hits <- !file.exists(vsearch_out) || file.info(vsearch_out)$size == 0
+  if (no_hits && !gated) {
     stop("vsearch produced no output. Check that the FASTA file contains valid sequences.")
   }
 
   cat("[sim] Parsing vsearch output...\n")
-  b <- fread(vsearch_out, sep = "\t", header = FALSE,
-             col.names = c("qid", "sid", "pident", if (gated) c("qcov", "tcov")),
-             nThread = n_cpus)
+  b <- if (no_hits) {
+    data.table(qid = character(0), sid = character(0), pident = numeric(0))
+  } else {
+    fread(vsearch_out, sep = "\t", header = FALSE,
+          col.names = c("qid", "sid", "pident"),
+          nThread = n_cpus)
+  }
   b[, score := round(pident / 100, 4)]
   b[, pident := NULL]
 
-  # Taken before gating, so a sequence with every pair gated out stays as a
-  # self-only node rather than disappearing from the matrix.
-  all_ids <- unique(c(b$qid, b$sid))
-  if (gated) b <- b[qcov >= min_cov & tcov >= min_cov]
-
+  all_ids <- if (gated) {
+    lines <- readLines(fasta_file)
+    sub("^>([^ ]+).*", "\\1", lines[startsWith(lines, ">")])
+  } else {
+    unique(c(b$qid, b$sid))
+  }
   sim_dt  <- rbindlist(list(
     b[, .(i = qid, j = sid, score)],
     b[, .(i = sid, j = qid, score)],
@@ -120,9 +137,11 @@ compute_vsearch_sim <- function(fasta_file, n_cpus, tmp_dir, min_cov = 0) {
 
 cat("[sim] Input:   ", fasta_file, "\n")
 cat("[sim] Threads: ", n_cpus, "\n")
-cat("[sim] Tmp dir: ", tmp_dir, "\n\n")
+cat("[sim] Tmp dir: ", tmp_dir, "\n")
+cat("[sim] iddef:   ", iddef, "\n")
+cat("[sim] min_overlap: ", min_overlap, "bp\n\n")
 
-sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir, min_cov)
+sim_df   <- compute_vsearch_sim(fasta_file, n_cpus, tmp_dir, iddef, min_overlap)
 out_file <- file.path(output_dir, paste0(strip_ext(fasta_file), ".sim"))
 
 cat("[sim] Saving similarity matrix to:", out_file, "\n")
